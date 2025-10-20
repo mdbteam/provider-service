@@ -1,0 +1,8 @@
+# requirements.txt
+fastapi
+uvicorn[standard]
+python-dotenv
+pyodbc
+google-cloud-storage
+python-jose[cryptography]
+python-multipart
