@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from app.database import get_db_connection
-from app.models import PrestadorResumen, PostulacionForm, PostulacionResponse, UserInDB
+from app.models import PrestadorResumen, PostulacionForm, PostulacionResponse, UserInDB, ProfileDetail, ValoracionCreate
 from app.auth_utils import get_current_active_user, get_current_admin_user
 from app.storage import upload_file_and_get_url
 
@@ -61,6 +61,35 @@ def get_all_prestadores(conn: pyodbc.Connection = Depends(get_db_connection)):
             ) for row in rows
         ]
         return prestadores
+    except pyodbc.Error as e:
+        raise HTTPException(status_code=500, detail=f"Error en la base de datos: {e}")
+    finally:
+        cursor.close()
+
+
+@app.get("/profile/me", response_model=ProfileDetail, tags=["Perfil"])
+def get_my_profile(
+        current_user: UserInDB = Depends(get_current_active_user),
+        conn: pyodbc.Connection = Depends(get_db_connection)
+):
+    cursor = conn.cursor()
+    query = """
+        SELECT 
+            u.id_usuario, u.nombres, u.primer_apellido, u.foto_url,
+            u.genero, u.fecha_nacimiento,
+            p.biografia, p.resumen_profesional, p.anos_experiencia
+        FROM Usuarios u
+        LEFT JOIN Perfil p ON u.id_usuario = p.id_usuario
+        WHERE u.id_usuario = ?
+    """
+    try:
+        cursor.execute(query, current_user.id_usuario)
+        profile_data = cursor.fetchone()
+        if not profile_data:
+            raise HTTPException(status_code=404, detail="Perfil no encontrado.")
+
+        profile_dict = dict(zip([column[0] for column in profile_data.cursor_description], profile_data))
+        return ProfileDetail(**profile_dict)
     except pyodbc.Error as e:
         raise HTTPException(status_code=500, detail=f"Error en la base de datos: {e}")
     finally:
@@ -165,3 +194,28 @@ def approve_postulacion(
     finally:
         cursor.close()
     return {"mensaje": f"Postulación {id_postulacion} aprobada. El usuario {id_usuario} ahora es prestador."}
+
+
+@app.post("/prestadores/{id_prestador}/valorar", tags=["Prestadores"])
+def create_valoracion(
+        id_prestador: int,
+        valoracion_data: ValoracionCreate,
+        current_user: UserInDB = Depends(get_current_active_user),
+        conn: pyodbc.Connection = Depends(get_db_connection)
+):
+    id_cliente = current_user.id_usuario
+    if id_cliente == id_prestador:
+        raise HTTPException(status_code=400, detail="No puedes valorarte a ti mismo.")
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "INSERT INTO Valoraciones (id_prestador, id_cliente, puntaje, comentario) VALUES (?, ?, ?, ?)",
+            id_prestador, id_cliente, valoracion_data.puntaje, valoracion_data.comentario
+        )
+        conn.commit()
+    except pyodbc.Error as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Error en la base de datos: {e}")
+    finally:
+        cursor.close()
+    return {"mensaje": "Valoración enviada exitosamente."}
