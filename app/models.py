@@ -2,8 +2,9 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional
 from fastapi import Form, UploadFile, File
-from datetime import date
+from datetime import date, datetime
 
+# --- MODELOS GENERALES ---
 class PrestadorResumen(BaseModel):
     id: str
     nombres: str
@@ -13,18 +14,38 @@ class PrestadorResumen(BaseModel):
     resumen: Optional[str]
     puntuacion: float
 
+class ProfileDetail(BaseModel):
+    id_usuario: int
+    nombres: str
+    primer_apellido: str
+    foto_url: str
+    genero: Optional[str] = None
+    fecha_nacimiento: Optional[date] = None
+    biografia: Optional[str] = None
+    resumen_profesional: Optional[str] = None
+    anos_experiencia: Optional[int] = None
+
+class UserInDB(BaseModel):
+    id_usuario: int
+    nombres: str
+    primer_apellido: str
+    correo: str
+    id_rol: int
+    estado: str
+
+# --- MODELOS PARA EL FLUJO DE POSTULACIÓN ---
 class PostulacionForm:
     def __init__(
-            self,
-            nombres: str = Form(...),
-            primer_apellido: str = Form(...),
-            segundo_apellido: str = Form(None),
-            direccion: str = Form(...),
-            telefono: str = Form(None),
-            oficio: str = Form(...),
-            bio: str = Form(...),
-            archivos_portafolio: List[UploadFile] = File(...),
-            archivos_certificados: List[UploadFile] = File(...)
+        self,
+        nombres: str = Form(...),
+        primer_apellido: str = Form(...),
+        segundo_apellido: str = Form(None),
+        direccion: str = Form(...),
+        telefono: str = Form(None),
+        oficio: str = Form(...),
+        bio: str = Form(...),
+        archivos_portafolio: List[UploadFile] = File(...),
+        archivos_certificados: List[UploadFile] = File(...)
     ):
         self.nombres = nombres
         self.primer_apellido = primer_apellido
@@ -40,27 +61,37 @@ class PostulacionResponse(BaseModel):
     mensaje: str
     statusPostulacion: str
 
-class ValoracionCreate(BaseModel):
+# --- MODELOS PARA EL FLUJO DE TRABAJOS (CONTRATOS) ---
+class TrabajoCreate(BaseModel):
+    id_cita: int
+    id_cliente: int
+    id_prestador: int
+    descripcion: str
+    condiciones: Optional[str] = None
+    precio_acordado: float
+
+class TrabajoDetail(BaseModel):
+    id_trabajo: int
+    id_cita: int
+    id_cliente: int
+    id_prestador: int
+    descripcion: str
+    condiciones: Optional[str] = None
+    precio_acordado: float
+    estado: str
+    fecha_propuesta: datetime
+    fecha_aceptacion: Optional[datetime] = None
+    fecha_finalizacion_prestador: Optional[datetime] = None
+    fecha_finalizacion_cliente: Optional[datetime] = None
+
+class ValoracionTrabajoCreate(BaseModel):
     puntaje: int = Field(..., ge=1, le=5)
     comentario: Optional[str] = None
 
-# Modelo para el endpoint GET /profile/me
-class ProfileDetail(BaseModel):
-    id_usuario: int
-    nombres: str
-    primer_apellido: str
-    foto_url: str
-    genero: Optional[str] = None
-    fecha_nacimiento: Optional[date] = None
-    biografia: Optional[str] = None
-    resumen_profesional: Optional[str] = None
-    anos_experiencia: Optional[int] = None
-
-# Modelo interno para manejar el usuario autenticado
-class UserInDB(BaseModel):
-    id_usuario: int
-    nombres: str
-    primer_apellido: str
-    correo: str
-    id_rol: int
-    estado: str
+class TrabajoHistorial(BaseModel):
+    id_trabajo: int
+    descripcion: str
+    precio_acordado: float
+    fecha_finalizacion_cliente: datetime
+    puntaje_recibido: Optional[int] = None
+    comentario_recibido: Optional[str] = None
