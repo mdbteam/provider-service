@@ -1,4 +1,4 @@
-# app/models.py
+# provider-service/app/models.py
 from pydantic import BaseModel, Field
 from typing import List, Optional
 from fastapi import Form, UploadFile, File
@@ -14,7 +14,21 @@ class PrestadorResumen(BaseModel):
     resumen: Optional[str]
     puntuacion: float
 
-class ProfileDetail(BaseModel):
+# --- MODELO UserPublic UNIFICADO ---
+class UserPublic(BaseModel):
+    id: str
+    nombres: str
+    primer_apellido: str
+    segundo_apellido: Optional[str] = None
+    rut: str
+    correo: str
+    direccion: Optional[str] = None
+    rol: str
+    foto_url: str
+    genero: Optional[str] = None
+    fecha_nacimiento: Optional[date] = None
+
+class ProfileDetail(BaseModel): # Mantenido para vistas públicas detalladas si es necesario
     id_usuario: int
     nombres: str
     primer_apellido: str
@@ -25,13 +39,26 @@ class ProfileDetail(BaseModel):
     resumen_profesional: Optional[str] = None
     anos_experiencia: Optional[int] = None
 
+# --- MODELO UserInDB para provider-service ---
 class UserInDB(BaseModel):
     id_usuario: int
     nombres: str
     primer_apellido: str
+    segundo_apellido: Optional[str] = None
+    rut: str
     correo: str
+    direccion: Optional[str] = None
     id_rol: int
     estado: str
+    foto_url: str
+    genero: Optional[str] = None
+    fecha_nacimiento: Optional[date] = None
+
+# --- MODELO PARA ACTUALIZACIÓN DE PERFIL ---
+class ProfileUpdate(BaseModel):
+    direccion: Optional[str] = Field(None, max_length=255)
+    biografia: Optional[str] = None
+    correo: Optional[str] = Field(None, max_length=100) # Permitimos actualizar correo
 
 # --- MODELOS PARA EL FLUJO DE POSTULACIÓN ---
 class PostulacionForm:
