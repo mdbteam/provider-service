@@ -60,6 +60,21 @@ class ProfileUpdate(BaseModel):
     biografia: Optional[str] = None
     correo: Optional[str] = Field(None, max_length=100) # Permitimos actualizar correo
 
+# --- MODELOS PARA EXPERIENCIA LABORAL ---
+class ExperienciaCreate(BaseModel):
+    cargo: str = Field(..., max_length=255)
+    descripcion: str
+    fecha_inicio: date
+    fecha_fin: Optional[date] = None # None si es actual
+
+class ExperienciaResponse(BaseModel):
+    id_experiencia: int
+    id_usuario: int
+    cargo: str
+    descripcion: str
+    fecha_inicio: date
+    fecha_fin: Optional[date] = None
+
 # --- MODELOS PARA EL FLUJO DE POSTULACIÓN ---
 class PostulacionForm:
     def __init__(
@@ -68,7 +83,7 @@ class PostulacionForm:
         primer_apellido: str = Form(...),
         segundo_apellido: str = Form(None),
         direccion: str = Form(...),
-        telefono: str = Form(None),
+        telefono: str = Form(None), # Asume 'telefono' column exists in Usuarios
         oficio: str = Form(...),
         bio: str = Form(...),
         archivos_portafolio: List[UploadFile] = File(...),

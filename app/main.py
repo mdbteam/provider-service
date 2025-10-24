@@ -1,6 +1,6 @@
 # provider-service/app/main.py
 from fastapi import FastAPI, Depends, HTTPException, status, File, UploadFile
-from typing import List
+from typing import List, Optional # Asegúrate de importar Optional
 import pyodbc
 from dotenv import load_dotenv
 from datetime import date # Importar date
@@ -8,11 +8,11 @@ from datetime import date # Importar date
 load_dotenv(override=True)
 
 from app.database import get_db_connection
-# Importamos UserPublic y ProfileUpdate
+# Importamos los nuevos modelos Experiencia*
 from app.models import (
     PrestadorResumen, UserInDB, ProfileDetail, PostulacionForm, PostulacionResponse,
     TrabajoCreate, TrabajoDetail, ValoracionTrabajoCreate, TrabajoHistorial, UserPublic,
-    ProfileUpdate
+    ProfileUpdate, ExperienciaCreate, ExperienciaResponse
 )
 # Importamos la dependencia correcta
 from app.auth_utils import get_current_active_user, get_current_admin_user
@@ -30,6 +30,10 @@ ROLE_HYBRID = 3
 ROLE_CLIENTE = 1
 STATUS_ACTIVO = 'activo'
 STATUS_PENDIENTE = 'pendiente'
+
+def es_prestador(user: UserInDB): # Función auxiliar
+    if user.id_rol not in [ROLE_PROVEEDOR, ROLE_HYBRID]:
+        raise HTTPException(status_code=403, detail="Acción solo para prestadores.")
 
 @app.get("/", tags=["Status"])
 def root():
@@ -73,7 +77,7 @@ def get_all_prestadores(conn: pyodbc.Connection = Depends(get_db_connection)):
     finally:
         cursor.close()
 
-# --- ENDPOINT /users/me UNIFICADO ---
+# --- ENDPOINTS DE PERFIL ---
 @app.get("/users/me", response_model=UserPublic, tags=["Perfil"])
 def read_users_me(current_user: UserInDB = Depends(get_current_active_user)):
     """Devuelve los datos públicos COMPLETOS del usuario autenticado."""
@@ -92,7 +96,6 @@ def read_users_me(current_user: UserInDB = Depends(get_current_active_user)):
         genero=current_user.genero,
         fecha_nacimiento=current_user.fecha_nacimiento
     )
-# --- FIN ENDPOINT /users/me ---
 
 @app.put("/profile/me/picture", tags=["Perfil"])
 def update_profile_picture(file: UploadFile = File(...), current_user: UserInDB = Depends(get_current_active_user),
@@ -110,7 +113,6 @@ def update_profile_picture(file: UploadFile = File(...), current_user: UserInDB 
         cursor.close()
     return {"mensaje": "Foto de perfil actualizada", "foto_url": photo_url}
 
-# --- ENDPOINT PATCH /profile/me ---
 @app.patch("/profile/me", response_model=UserPublic, tags=["Perfil"])
 def update_my_profile(
     profile_data: ProfileUpdate,
@@ -120,107 +122,121 @@ def update_my_profile(
     """Actualiza dirección, biografía o correo del usuario autenticado."""
     user_id = current_user.id_usuario
     cursor = conn.cursor()
+    user_updates, user_values, perfil_updates, perfil_values, perfil_insert_cols, perfil_insert_placeholders = [], [], [], [], [], []
 
-    user_updates = []
-    user_values = []
-    perfil_updates = []
-    perfil_values = []
-    perfil_insert_cols = []
-    perfil_insert_placeholders = []
-
-    # Validar Correo Nuevo (si se proporciona)
     if profile_data.correo is not None and profile_data.correo != current_user.correo:
         cursor.execute("SELECT id_usuario FROM Usuarios WHERE correo = ? AND id_usuario != ?", profile_data.correo, user_id)
         if cursor.fetchone():
-            cursor.close() # Cerramos antes de lanzar excepción
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="El nuevo correo electrónico ya está en uso por otro usuario.")
+            cursor.close(); raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="El nuevo correo ya está en uso.")
         user_updates.append("correo = ?"); user_values.append(profile_data.correo)
-
-    # Añadir otros campos permitidos
-    if profile_data.direccion is not None:
-        user_updates.append("direccion = ?"); user_values.append(profile_data.direccion)
+    if profile_data.direccion is not None: user_updates.append("direccion = ?"); user_values.append(profile_data.direccion)
     if profile_data.biografia is not None:
         perfil_updates.append("biografia = ?"); perfil_values.append(profile_data.biografia)
         perfil_insert_cols.append("biografia"); perfil_insert_placeholders.append("?")
 
-    # Verificar si hay algo que actualizar
     if not user_updates and not perfil_updates:
-        cursor.close() # Cerramos si no hay nada que hacer
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No se proporcionaron datos válidos para actualizar.")
+        cursor.close(); raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No hay datos para actualizar.")
 
     try:
         if user_updates:
-            user_query = f"UPDATE Usuarios SET {', '.join(user_updates)} WHERE id_usuario = ?"
-            cursor.execute(user_query, tuple(user_values + [user_id]))
-
+            cursor.execute(f"UPDATE Usuarios SET {', '.join(user_updates)} WHERE id_usuario = ?", tuple(user_values + [user_id]))
         if perfil_updates:
-            perfil_query = f"""
-                MERGE Perfil AS target
-                USING (SELECT ? AS id_usuario) AS source ON (target.id_usuario = source.id_usuario)
-                WHEN MATCHED THEN UPDATE SET {', '.join(perfil_updates)}
-                WHEN NOT MATCHED THEN INSERT (id_usuario, {', '.join(perfil_insert_cols)}) VALUES (?, {', '.join(perfil_insert_placeholders)});
-            """
+            perfil_query = f"""MERGE Perfil AS target USING (SELECT ? AS id_usuario) AS source ON (target.id_usuario = source.id_usuario)
+                           WHEN MATCHED THEN UPDATE SET {', '.join(perfil_updates)}
+                           WHEN NOT MATCHED THEN INSERT (id_usuario, {', '.join(perfil_insert_cols)}) VALUES (?, {', '.join(perfil_insert_placeholders)});"""
             cursor.execute(perfil_query, tuple([user_id] + perfil_values + [user_id] + perfil_values))
-
         conn.commit()
     except pyodbc.Error as e:
-        conn.rollback()
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error en BBDD al actualizar perfil: {e}")
+        conn.rollback(); raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error BBDD: {e}")
     finally:
-
         if cursor: cursor.close()
 
-    new_conn = None
-    new_cursor = None
+    # Devolvemos datos actualizados
+    new_conn = None; new_cursor = None
     try:
-        new_conn = get_db_connection().__next__() # Obtener nueva conexión
+        new_conn = get_db_connection().__next__()
         new_cursor = new_conn.cursor()
-        new_cursor.execute("""
-            SELECT id_usuario, nombres, primer_apellido, segundo_apellido, rut, correo,
-                   direccion, id_rol, estado, foto_url, genero, fecha_nacimiento
-            FROM Usuarios WHERE id_usuario = ?
-            """, user_id)
+        new_cursor.execute("SELECT id_usuario, nombres, primer_apellido, segundo_apellido, rut, correo, direccion, id_rol, estado, foto_url, genero, fecha_nacimiento FROM Usuarios WHERE id_usuario = ?", user_id)
         updated_user_record = new_cursor.fetchone()
     except Exception as e:
-         # Si falla la re-consulta, al menos la actualización se hizo
-         print(f"WARN: Actualización exitosa, pero error al re-obtener datos: {e}")
-         # Devolvemos los datos conocidos antes de la actualización como fallback
-         rol_map = {0: "administrador", 1: "cliente", 2: "prestador", 3: "híbrido"}
-         rol_str = rol_map.get(current_user.id_rol, "desconocido")
-         return UserPublic(
-             id=str(user_id), nombres=current_user.nombres, primer_apellido=current_user.primer_apellido,
-             segundo_apellido=current_user.segundo_apellido, rut=current_user.rut,
-             correo=profile_data.correo if profile_data.correo else current_user.correo, # Usar el nuevo correo si cambió
-             direccion=profile_data.direccion if profile_data.direccion else current_user.direccion, # Usar nueva dir si cambió
-             rol=rol_str, foto_url=current_user.foto_url, genero=current_user.genero,
-             fecha_nacimiento=current_user.fecha_nacimiento
-         )
+         print(f"WARN: Error al re-obtener datos: {e}"); updated_user_record = None # Fallback silencioso
     finally:
         if new_cursor: new_cursor.close()
         if new_conn: new_conn.close()
 
+    if not updated_user_record: # Si falla la re-consulta, usamos datos previos + actualizados
+        rol_map = {0: "admin", 1: "cliente", 2: "prestador", 3: "híbrido"}
+        rol_str = rol_map.get(current_user.id_rol, "desconocido")
+        return UserPublic(
+             id=str(user_id), nombres=current_user.nombres, primer_apellido=current_user.primer_apellido, segundo_apellido=current_user.segundo_apellido,
+             rut=current_user.rut, correo=profile_data.correo if profile_data.correo else current_user.correo,
+             direccion=profile_data.direccion if profile_data.direccion else current_user.direccion, rol=rol_str, foto_url=current_user.foto_url,
+             genero=current_user.genero, fecha_nacimiento=current_user.fecha_nacimiento
+         )
 
-    if not updated_user_record:
-        raise HTTPException(status_code=404, detail="Usuario no encontrado después de actualizar.")
-
-    rol_map = {0: "administrador", 1: "cliente", 2: "prestador", 3: "híbrido"}
+    rol_map = {0: "admin", 1: "cliente", 2: "prestador", 3: "híbrido"}
     rol_str = rol_map.get(updated_user_record.id_rol, "desconocido")
-
-    # Mapeamos a UserPublic
     return UserPublic(
-        id=str(updated_user_record.id_usuario),
-        nombres=updated_user_record.nombres,
-        primer_apellido=updated_user_record.primer_apellido,
-        segundo_apellido=updated_user_record.segundo_apellido,
-        rut=updated_user_record.rut,
-        correo=updated_user_record.correo,
-        direccion=updated_user_record.direccion,
-        rol=rol_str,
-        foto_url=updated_user_record.foto_url,
-        genero=updated_user_record.genero,
-        fecha_nacimiento=updated_user_record.fecha_nacimiento
+        id=str(updated_user_record.id_usuario), nombres=updated_user_record.nombres, primer_apellido=updated_user_record.primer_apellido,
+        segundo_apellido=updated_user_record.segundo_apellido, rut=updated_user_record.rut, correo=updated_user_record.correo,
+        direccion=updated_user_record.direccion, rol=rol_str, foto_url=updated_user_record.foto_url,
+        genero=updated_user_record.genero, fecha_nacimiento=updated_user_record.fecha_nacimiento
     )
-# --- FIN ENDPOINT PATCH ---
+
+# --- ENDPOINTS DE EXPERIENCIA LABORAL ---
+@app.post("/profile/me/experience", response_model=ExperienciaResponse, status_code=status.HTTP_201_CREATED, tags=["Perfil"])
+def add_experience(
+    experience_data: ExperienciaCreate,
+    current_user: UserInDB = Depends(get_current_active_user),
+    conn: pyodbc.Connection = Depends(get_db_connection)
+):
+    """(Solo Prestadores) Añade una nueva entrada de experiencia laboral al perfil."""
+    es_prestador(current_user) # Asegura que sea prestador o híbrido
+    user_id = current_user.id_usuario
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            INSERT INTO ExperienciaLaboral (id_usuario, cargo, descripcion, fecha_inicio, fecha_fin)
+            OUTPUT INSERTED.*
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            user_id, experience_data.cargo, experience_data.descripcion,
+            experience_data.fecha_inicio, experience_data.fecha_fin
+        )
+        new_experience = cursor.fetchone()
+        conn.commit()
+        exp_dict = dict(zip([column[0] for column in new_experience.cursor_description], new_experience))
+        return ExperienciaResponse(**exp_dict)
+    except pyodbc.Error as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Error BBDD al añadir experiencia: {e}")
+    finally:
+        cursor.close()
+
+@app.get("/profile/me/experience", response_model=List[ExperienciaResponse], tags=["Perfil"])
+def get_my_experience(
+    current_user: UserInDB = Depends(get_current_active_user),
+    conn: pyodbc.Connection = Depends(get_db_connection)
+):
+    """Obtiene la lista de experiencias laborales del usuario autenticado."""
+    user_id = current_user.id_usuario
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM ExperienciaLaboral WHERE id_usuario = ? ORDER BY fecha_inicio DESC", user_id)
+    experiences_db = cursor.fetchall()
+    cursor.close()
+    experiences = [ExperienciaResponse(**dict(zip([column[0] for column in row.cursor_description], row))) for row in experiences_db]
+    return experiences
+
+@app.get("/prestadores/{id_prestador}/experience", response_model=List[ExperienciaResponse], tags=["Prestadores"])
+def get_prestador_experience(id_prestador: int, conn: pyodbc.Connection = Depends(get_db_connection)):
+    """Obtiene la lista pública de experiencias laborales de un prestador."""
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM ExperienciaLaboral WHERE id_usuario = ? ORDER BY fecha_inicio DESC", id_prestador)
+    experiences_db = cursor.fetchall()
+    cursor.close()
+    experiences = [ExperienciaResponse(**dict(zip([column[0] for column in row.cursor_description], row))) for row in experiences_db]
+    return experiences
 
 
 # --- ENDPOINTS DE POSTULACIÓN ---
