@@ -52,7 +52,7 @@ def get_all_prestadores(conn: pyodbc.Connection = Depends(get_db_connection)):
             ISNULL(AVG(CAST(v.puntaje AS FLOAT)), 0) AS puntuacion_promedio
         FROM Usuarios u
         LEFT JOIN Perfil p ON u.id_usuario = p.id_usuario
-        LEFT JOIN Valoraciones v ON u.id_evaluado = u.id_usuario AND v.rol_autor = 'cliente'
+        LEFT JOIN Valoraciones v ON v.id_evaluado = u.id_usuario AND v.rol_autor = 'cliente'
         WHERE u.id_rol IN (?, ?) AND u.estado = 'activo'
         GROUP BY u.id_usuario, u.nombres, u.primer_apellido, u.foto_url, p.resumen_profesional
         ORDER BY puntuacion_promedio DESC;
