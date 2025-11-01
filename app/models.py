@@ -28,7 +28,9 @@ class UserPublic(BaseModel):
     genero: Optional[str] = None
     fecha_nacimiento: Optional[date] = None
 
-class ProfileDetail(BaseModel): # Mantenido para vistas públicas detalladas si es necesario
+# --- ORDEN CORREGIDO ---
+# ProfileDetail DEBE definirse ANTES de PrestadorPublicoDetalle
+class ProfileDetail(BaseModel):
     id_usuario: int
     nombres: str
     primer_apellido: str
@@ -54,18 +56,26 @@ class UserInDB(BaseModel):
     genero: Optional[str] = None
     fecha_nacimiento: Optional[date] = None
 
-# --- MODELO PARA ACTUALIZACIÓN DE PERFIL ---
+# --- MODELO PARA ACTUALIZACIÓN DE PERFIL (Req 2.2) ---
 class ProfileUpdate(BaseModel):
+    nombres: Optional[str] = Field(None, max_length=100)
+    primer_apellido: Optional[str] = Field(None, max_length=100)
+    segundo_apellido: Optional[str] = Field(None, max_length=100)
     direccion: Optional[str] = Field(None, max_length=255)
+    genero: Optional[str] = Field(None, max_length=50)
+    fecha_nacimiento: Optional[date] = None
     biografia: Optional[str] = None
-    correo: Optional[str] = Field(None, max_length=100) # Permitimos actualizar correo
+    resumen_profesional: Optional[str] = None
+    anos_experiencia: Optional[int] = None
+    correo: Optional[str] = Field(None, max_length=100)
+    # telefono: Optional[str] = None
 
 # --- MODELOS PARA EXPERIENCIA LABORAL ---
 class ExperienciaCreate(BaseModel):
     cargo: str = Field(..., max_length=255)
     descripcion: str
     fecha_inicio: date
-    fecha_fin: Optional[date] = None # None si es actual
+    fecha_fin: Optional[date] = None
 
 class ExperienciaResponse(BaseModel):
     id_experiencia: int
@@ -83,7 +93,7 @@ class PostulacionForm:
         primer_apellido: str = Form(...),
         segundo_apellido: str = Form(None),
         direccion: str = Form(...),
-        telefono: str = Form(None), # Asume 'telefono' column exists in Usuarios
+        telefono: str = Form(None),
         oficio: str = Form(...),
         bio: str = Form(...),
         archivos_portafolio: List[UploadFile] = File(...),
@@ -102,6 +112,42 @@ class PostulacionForm:
 class PostulacionResponse(BaseModel):
     mensaje: str
     statusPostulacion: str
+
+class PostulacionPendiente(BaseModel):
+    id_postulacion: int
+    id_usuario: int
+    nombres: str
+    primer_apellido: str
+    correo: str
+    fecha_postulacion: datetime
+    estado: str
+
+class PostulacionModificar(BaseModel):
+    notas_admin: str
+
+class ResenaPublica(BaseModel):
+    id_valoracion: int
+    id_autor: int
+    id_evaluado: int
+    rol_autor: str
+    puntaje: Optional[int] = None
+    comentario: Optional[str] = None
+    fecha_creacion: datetime
+
+# --- MODELO PARA EL PERFIL PÚBLICO DETALLADO ---
+class PrestadorPublicoDetalle(BaseModel):
+    id_usuario: int
+    nombres: str
+    primer_apellido: str
+    segundo_apellido: Optional[str] = None
+    foto_url: str
+    oficios: List[str]
+    puntuacion_promedio: float
+    trabajos_realizados: int
+    perfil: Optional[ProfileDetail] = None # Ahora 'ProfileDetail' ya existe
+    portafolio: List[str]
+    experiencia: List[ExperienciaResponse]
+    resenas: List[ResenaPublica]
 
 # --- MODELOS PARA EL FLUJO DE TRABAJOS (CONTRATOS) ---
 class TrabajoCreate(BaseModel):
