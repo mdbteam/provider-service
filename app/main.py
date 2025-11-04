@@ -93,7 +93,7 @@ def get_all_prestadores(
     # Agrupar y Ordenar
     query += """
         GROUP BY u.id_usuario, u.nombres, u.primer_apellido, u.foto_url, p.resumen_profesional
-        ORDER BY u.nombres;
+        ORDER BY puntuacion_promedio DESC;
     """
 
     try:
