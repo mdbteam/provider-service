@@ -8,6 +8,7 @@ from datetime import date
 load_dotenv(override=True)
 
 from app.database import get_db_connection
+# Importamos todos los modelos necesarios
 from app.models import (
     PrestadorResumen, UserInDB, ProfileDetail, PostulacionForm, PostulacionResponse,
     TrabajoCreate, TrabajoDetail, ValoracionTrabajoCreate, TrabajoHistorial, UserPublic,
@@ -45,25 +46,52 @@ def root():
 
 @app.get("/prestadores", response_model=List[PrestadorResumen], tags=["Prestadores"])
 def get_all_prestadores(conn: pyodbc.Connection = Depends(get_db_connection)):
-    """(Req 2.3) Obtiene lista de prestadores. (Consulta simplificada)"""
+    """(Req 2.3) Obtiene lista de prestadores con puntuación promedio."""
     cursor = conn.cursor()
+
+    # --- CONSULTA SQL CORREGIDA Y COMPLETA ---
+    # (Usa la subconsulta CTE que sabemos que funciona)
     query = """
-        SELECT DISTINCT u.id_usuario, u.nombres, u.primer_apellido, u.foto_url,
-            p.resumen_profesional,
-            (SELECT STRING_AGG(o.nombre_oficio, ', ') FROM Oficio o WHERE o.id_usuario = u.id_usuario) AS oficios
-        FROM Usuarios u
-        LEFT JOIN Perfil p ON u.id_usuario = p.id_usuario
-        LEFT JOIN Oficio ofi ON u.id_usuario = ofi.id_usuario
-        WHERE u.id_rol IN (?, ?) AND u.estado = 'activo'
-        GROUP BY u.id_usuario, u.nombres, u.primer_apellido, u.foto_url, p.resumen_profesional ORDER BY u.nombres;
+WITH AvgValoraciones AS (
+    SELECT
+        id_evaluado,
+        AVG(CAST(puntaje AS FLOAT)) AS puntuacion_promedio
+    FROM Valoraciones
+    WHERE rol_autor = 'cliente'
+    GROUP BY id_evaluado
+)
+SELECT DISTINCT
+    u.id_usuario, u.nombres, u.primer_apellido, u.foto_url,
+    p.resumen_profesional,
+    (SELECT STRING_AGG(o.nombre_oficio, ', ') FROM Oficio o WHERE o.id_usuario = u.id_usuario) AS oficios,
+    ISNULL(avg_v.puntuacion_promedio, 0) AS puntuacion_promedio
+FROM Usuarios u
+LEFT JOIN Perfil p ON u.id_usuario = p.id_usuario
+LEFT JOIN AvgValoraciones avg_v ON u.id_usuario = avg_v.id_evaluado
+WHERE u.id_rol IN (?, ?) AND u.estado = 'activo'
+ORDER BY puntuacion_promedio DESC;
+
     """
+    # --- FIN CONSULTA CORREGIDA ---
+
     try:
         cursor.execute(query, ROLE_PROVEEDOR, ROLE_HYBRID)
         rows = cursor.fetchall()
-        prestadores = [PrestadorResumen(
-            id=str(row.id_usuario), nombres=row.nombres, primer_apellido=row.primer_apellido, foto_url=row.foto_url,
-            oficios=row.oficios.split(', ') if row.oficios else [], resumen=row.resumen_profesional, puntuacion=0.0
-        ) for row in rows]
+
+        # --- MAPEO CORREGIDO ---
+        prestadores = [
+            PrestadorResumen(
+                id=str(row.id_usuario),
+                nombres=row.nombres,
+                primer_apellido=row.primer_apellido,
+                foto_url=row.foto_url,
+                oficios=row.oficios.split(', ') if row.oficios else [],
+                resumen=row.resumen_profesional,
+                puntuacion=round(row.puntuacion_promedio, 1)  # <-- Usamos puntuacion_promedio
+            ) for row in rows
+        ]
+        # --- FIN MAPEO CORREGIDO ---
+
         return prestadores
     except pyodbc.Error as e:
         raise HTTPException(status_code=500, detail=f"Error en la base de datos: {e}")
@@ -74,7 +102,12 @@ def get_all_prestadores(conn: pyodbc.Connection = Depends(get_db_connection)):
 @app.get("/categorias", response_model=List[str], tags=["Prestadores"])
 def get_categorias():
     """(Req 2.4) Devuelve la lista de oficios únicos para filtros."""
-    categorias_fijas = ["Gasfitería", "Electricidad", "Carpintería", "Pintura", "Jardinería", "Limpieza", "Mueblería"]
+    categorias_fijas = [
+        "Gasfitería", "Electricidad", "Pintura", "Albañilería", "Carpintería",
+        "Jardinería", "Mecánica", "Plomería", "Cerrajería",
+        "Reparación de Electrodomésticos", "Instalación de Aire Acondicionado",
+        "Servicios de Limpieza", "Techado", "Otro"
+    ]
     return categorias_fijas
 
 
@@ -108,9 +141,7 @@ def get_prestador_detalle(id_prestador: int, conn: pyodbc.Connection = Depends(g
                        cursor.fetchall()]
 
         # 5. Reseñas
-        cursor.execute(
-            "SELECT * FROM Valoraciones WHERE id_evaluado = ?  ORDER BY fecha_creacion DESC",
-            id_prestador)
+        cursor.execute("SELECT * FROM Valoraciones WHERE id_evaluado = ? ORDER BY fecha_creacion DESC", id_prestador)
         resenas = [ResenaPublica(**dict(zip([col[0] for col in row.cursor_description], row))) for row in
                    cursor.fetchall()]
 
@@ -166,11 +197,10 @@ def update_profile_picture(file: UploadFile = File(...), current_user: UserInDB 
         cursor.close()
 
     # Devolvemos el usuario completo llamando a nuestra otra función de endpoint
-    # (FastAPI inyectará las dependencias necesarias para esta llamada interna)
+    # FastAPI inyectará las dependencias necesarias para esta llamada interna
     return read_users_me(current_user=current_user)
 
 
-# --- (Req 2.2) ENDPOINT PATCH CORREGIDO ---
 @app.patch("/profile/me", response_model=UserPublic, tags=["Perfil"])
 def update_my_profile(
         profile_data: ProfileUpdate,
@@ -192,7 +222,6 @@ def update_my_profile(
         user_updates.append("correo = ?");
         user_values.append(profile_data.correo)
 
-    # --- (AQUÍ ESTÁ LA CORRECCIÓN) ---
     # Revisamos todos los campos que SÍ están en el modelo ProfileUpdate
     if profile_data.direccion is not None: user_updates.append("direccion = ?"); user_values.append(
         profile_data.direccion)
@@ -204,6 +233,7 @@ def update_my_profile(
     if profile_data.genero is not None: user_updates.append("genero = ?"); user_values.append(profile_data.genero)
     if profile_data.fecha_nacimiento is not None: user_updates.append("fecha_nacimiento = ?"); user_values.append(
         profile_data.fecha_nacimiento)
+    if profile_data.telefono is not None: user_updates.append("telefono = ?"); user_values.append(profile_data.telefono)
 
     if profile_data.biografia is not None:
         perfil_updates.append("biografia = ?");
@@ -238,19 +268,19 @@ def update_my_profile(
     except pyodbc.Error as e:
         conn.rollback();
         raise HTTPException(status_code=500, detail=f"Error BBDD: {e}")
-    finally:
-        # El cursor SÍ debe cerrarse aquí
+
+    # Volvemos a consultar la BBDD para obtener el estado MÁS reciente
+    try:
+        # Reutilizamos el cursor (ya se cerró si hubo error, si no, sigue abierto)
+        # Es más seguro cerrarlo y abrir uno nuevo si la conexión lo permite, pero
+        # la dependencia 'conn' es por *endpoint*. Usémoslo con cuidado.
+        # Mejor práctica: cerrar el cursor anterior y abrir uno nuevo para la nueva consulta.
         if cursor: cursor.close()
 
-    # --- (LÓGICA CORREGIDA PARA DEVOLVER DATOS) ---
-    # Volvemos a consultar la BBDD para obtener el estado MÁS reciente
-    # Usamos la conexión 'conn' que sigue abierta.
-    try:
-        cursor = conn.cursor()  # Abrimos un nuevo cursor
+        cursor = conn.cursor()  # Abrimos un nuevo cursor en la misma conexión
         cursor.execute("SELECT * FROM Usuarios WHERE id_usuario = ?", user_id)
         updated_user_record = cursor.fetchone()
     except pyodbc.Error as e:
-        # Si la re-consulta falla, es un problema, pero la actualización YA SE HIZO
         raise HTTPException(status_code=500, detail=f"Actualización exitosa, pero error al re-obtener datos: {e}")
     finally:
         if cursor: cursor.close()  # Cerramos el nuevo cursor
@@ -273,11 +303,9 @@ def update_my_profile(
         rol=rol_str,
         foto_url=user_data['foto_url'],
         genero=user_data['genero'],
-        fecha_nacimiento=user_data['fecha_nacimiento']
+        fecha_nacimiento=user_data['fecha_nacimiento'],
+        telefono=user_data['telefono']
     )
-
-
-# --- FIN ENDPOINT PATCH ---
 
 
 @app.post("/profile/me/experience", response_model=ExperienciaResponse, status_code=status.HTTP_201_CREATED,
@@ -338,10 +366,10 @@ def send_postulacion(form: PostulacionForm = Depends(), current_user: UserInDB =
     cursor = conn.cursor()
     user_id = current_user.id_usuario
     try:
-        # (Omitimos la actualización de teléfono por ahora)
+        # Actualizamos también el teléfono
         cursor.execute(
-            "UPDATE Usuarios SET nombres = ?, primer_apellido = ?, segundo_apellido = ?, direccion = ? WHERE id_usuario = ?",
-            form.nombres, form.primer_apellido, form.segundo_apellido, form.direccion, user_id)
+            "UPDATE Usuarios SET nombres = ?, primer_apellido = ?, segundo_apellido = ?, direccion = ?, telefono = ? WHERE id_usuario = ?",
+            form.nombres, form.primer_apellido, form.segundo_apellido, form.direccion, form.telefono, user_id)
         cursor.execute("DELETE FROM Portafolio WHERE id_usuario = ?", user_id)
         cursor.execute("DELETE FROM Certificaciones WHERE id_usuario = ?", user_id)
         cursor.execute("DELETE FROM Oficio WHERE id_usuario = ?", user_id)
@@ -391,7 +419,7 @@ def get_pendientes(admin_user: UserInDB = Depends(get_current_admin_user),
     """)
     pendientes_db = cursor.fetchall()
     cursor.close()
-    pendientes = [PostulacionPendiente(**dict(zip([col[0] for col in row.cursor_description], row))) for row in
+    pendientes = [PostulacionPendiente(**dict(zip([column[0] for column in row.cursor_description], row))) for row in
                   pendientes_db]
     return pendientes
 
@@ -620,5 +648,3 @@ def get_prestador_trabajos_historial(id_prestador: int, conn: pyodbc.Connection 
         raise HTTPException(status_code=500, detail=f"Error BBDD: {e}")
     finally:
         cursor.close()
-
-# --- (No incluimos el app.include_router) ---
