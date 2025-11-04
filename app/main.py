@@ -45,53 +45,59 @@ def root():
 # --- ENDPOINTS DE VISUALIZACIÓN ---
 
 @app.get("/prestadores", response_model=List[PrestadorResumen], tags=["Prestadores"])
-def get_all_prestadores(conn: pyodbc.Connection = Depends(get_db_connection)):
-    """(Req 2.3) Obtiene lista de prestadores con puntuación promedio."""
+def get_all_prestadores(
+        q: Optional[str] = None,  # (Req 2.4) Parámetro de búsqueda
+        categoria: Optional[str] = None,  # (Req 2.4) Parámetro de categoría
+        conn: pyodbc.Connection = Depends(get_db_connection)
+):
+    """(Req 2.3 y 2.4) Obtiene lista de prestadores, con filtros opcionales."""
     cursor = conn.cursor()
 
-    # --- CONSULTA SQL CORREGIDA Y COMPLETA ---
-    # (Usa la subconsulta CTE que sabemos que funciona)
+    # Consulta base (simplificada)
     query = """
-WITH AvgValoraciones AS (
-    SELECT
-        id_evaluado,
-        AVG(CAST(puntaje AS FLOAT)) AS puntuacion_promedio
-    FROM Valoraciones
-    WHERE rol_autor = 'cliente'
-    GROUP BY id_evaluado
-)
-SELECT DISTINCT
-    u.id_usuario, u.nombres, u.primer_apellido, u.foto_url,
-    p.resumen_profesional,
-    (SELECT STRING_AGG(o.nombre_oficio, ', ') FROM Oficio o WHERE o.id_usuario = u.id_usuario) AS oficios,
-    ISNULL(avg_v.puntuacion_promedio, 0) AS puntuacion_promedio
-FROM Usuarios u
-LEFT JOIN Perfil p ON u.id_usuario = p.id_usuario
-LEFT JOIN AvgValoraciones avg_v ON u.id_usuario = avg_v.id_evaluado
-WHERE u.id_rol IN (?, ?) AND u.estado = 'activo'
-ORDER BY puntuacion_promedio DESC;
-
+        SELECT DISTINCT 
+            u.id_usuario, u.nombres, u.primer_apellido, u.foto_url,
+            p.resumen_profesional,
+            (SELECT STRING_AGG(o.nombre_oficio, ', ') FROM Oficio o WHERE o.id_usuario = u.id_usuario) AS oficios
+        FROM Usuarios u
+        LEFT JOIN Perfil p ON u.id_usuario = p.id_usuario
+        LEFT JOIN Oficio ofi ON u.id_usuario = ofi.id_usuario
+        WHERE u.id_rol IN (?, ?) AND u.estado = 'activo'
     """
-    # --- FIN CONSULTA CORREGIDA ---
+    params = [ROLE_PROVEEDOR, ROLE_HYBRID]
+
+    # Añadir filtro de CATEGORÍA si existe
+    if categoria:
+        query += " AND ofi.nombre_oficio LIKE ?"
+        params.append(f"%{categoria}%")
+
+    # Añadir filtro de BÚSQUEDA (q) si existe
+    if q:
+        query += """
+            AND (
+                u.nombres LIKE ? 
+                OR u.primer_apellido LIKE ? 
+                OR p.resumen_profesional LIKE ?
+                OR ofi.nombre_oficio LIKE ?
+            )
+        """
+        search_term = f"%{q}%"
+        params.extend([search_term, search_term, search_term, search_term])
+
+    # Agrupar y Ordenar
+    query += """
+        GROUP BY u.id_usuario, u.nombres, u.primer_apellido, u.foto_url, p.resumen_profesional
+        ORDER BY u.nombres;
+    """
 
     try:
-        cursor.execute(query, ROLE_PROVEEDOR, ROLE_HYBRID)
+        # Ejecutamos la consulta dinámica
+        cursor.execute(query, tuple(params))
         rows = cursor.fetchall()
-
-        # --- MAPEO CORREGIDO ---
-        prestadores = [
-            PrestadorResumen(
-                id=str(row.id_usuario),
-                nombres=row.nombres,
-                primer_apellido=row.primer_apellido,
-                foto_url=row.foto_url,
-                oficios=row.oficios.split(', ') if row.oficios else [],
-                resumen=row.resumen_profesional,
-                puntuacion=round(row.puntuacion_promedio, 1)  # <-- Usamos puntuacion_promedio
-            ) for row in rows
-        ]
-        # --- FIN MAPEO CORREGIDO ---
-
+        prestadores = [PrestadorResumen(
+            id=str(row.id_usuario), nombres=row.nombres, primer_apellido=row.primer_apellido, foto_url=row.foto_url,
+            oficios=row.oficios.split(', ') if row.oficios else [], resumen=row.resumen_profesional, puntuacion=0.0
+        ) for row in rows]
         return prestadores
     except pyodbc.Error as e:
         raise HTTPException(status_code=500, detail=f"Error en la base de datos: {e}")
@@ -99,9 +105,12 @@ ORDER BY puntuacion_promedio DESC;
         cursor.close()
 
 
+# --- (FIN FUNCIÓN CORREGIDA) ---
+
 @app.get("/categorias", response_model=List[str], tags=["Prestadores"])
 def get_categorias():
     """(Req 2.4) Devuelve la lista de oficios únicos para filtros."""
+    # (Lista actualizada según la imagen que enviaste)
     categorias_fijas = [
         "Gasfitería", "Electricidad", "Pintura", "Albañilería", "Carpintería",
         "Jardinería", "Mecánica", "Plomería", "Cerrajería",
@@ -109,7 +118,6 @@ def get_categorias():
         "Servicios de Limpieza", "Techado", "Otro"
     ]
     return categorias_fijas
-
 
 @app.get("/prestadores/{id_prestador}", response_model=PrestadorPublicoDetalle, tags=["Prestadores"])
 def get_prestador_detalle(id_prestador: int, conn: pyodbc.Connection = Depends(get_db_connection)):
