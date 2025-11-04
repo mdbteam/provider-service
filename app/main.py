@@ -58,7 +58,13 @@ def get_all_prestadores(
         SELECT DISTINCT 
             u.id_usuario, u.nombres, u.primer_apellido, u.foto_url,
             p.resumen_profesional,
-            (SELECT STRING_AGG(o.nombre_oficio, ', ') FROM Oficio o WHERE o.id_usuario = u.id_usuario) AS oficios
+            (SELECT STRING_AGG(o.nombre_oficio, ', ') FROM Oficio o WHERE o.id_usuario = u.id_usuario) AS oficios,
+            
+            -- LÍNEA AÑADIDA --
+            (SELECT ISNULL(AVG(CAST(v.puntaje AS FLOAT)), 0.0) 
+             FROM Valoraciones v 
+             WHERE v.id_evaluado = u.id_usuario AND v.rol_autor = 'cliente') AS puntuacion_promedio
+
         FROM Usuarios u
         LEFT JOIN Perfil p ON u.id_usuario = p.id_usuario
         LEFT JOIN Oficio ofi ON u.id_usuario = ofi.id_usuario
@@ -96,7 +102,7 @@ def get_all_prestadores(
         rows = cursor.fetchall()
         prestadores = [PrestadorResumen(
             id=str(row.id_usuario), nombres=row.nombres, primer_apellido=row.primer_apellido, foto_url=row.foto_url,
-            oficios=row.oficios.split(', ') if row.oficios else [], resumen=row.resumen_profesional, puntuacion=0.0
+            oficios=row.oficios.split(', ') if row.oficios else [], resumen=row.resumen_profesional, puntuacion=round(float(row.puntuacion_promedio), 1)
         ) for row in rows]
         return prestadores
     except pyodbc.Error as e:
