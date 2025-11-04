@@ -29,7 +29,7 @@ async def get_current_user_from_token(token: str = Depends(oauth2_scheme), conn:
     # Fetch all necessary fields for UserInDB model
     cursor.execute("""
         SELECT id_usuario, nombres, primer_apellido, segundo_apellido, rut, correo,
-               direccion, id_rol, estado, foto_url, genero, fecha_nacimiento
+               direccion, id_rol, estado, foto_url, genero, fecha_nacimiento, telefono
         FROM Usuarios WHERE id_usuario = ?
         """, int(user_id))
     user_record = cursor.fetchone()

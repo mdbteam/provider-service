@@ -27,6 +27,7 @@ class UserPublic(BaseModel):
     foto_url: str
     genero: Optional[str] = None
     fecha_nacimiento: Optional[date] = None
+    telefono: Optional[str] = None
 
 # --- ORDEN CORREGIDO ---
 # ProfileDetail DEBE definirse ANTES de PrestadorPublicoDetalle
@@ -55,6 +56,7 @@ class UserInDB(BaseModel):
     foto_url: str
     genero: Optional[str] = None
     fecha_nacimiento: Optional[date] = None
+    telefono: Optional[str] = None
 
 # --- MODELO PARA ACTUALIZACIÓN DE PERFIL (Req 2.2) ---
 class ProfileUpdate(BaseModel):
@@ -68,7 +70,7 @@ class ProfileUpdate(BaseModel):
     resumen_profesional: Optional[str] = None
     anos_experiencia: Optional[int] = None
     correo: Optional[str] = Field(None, max_length=100)
-    # telefono: Optional[str] = None
+    telefono: Optional[str] = Field(None, max_length=15)
 
 # --- MODELOS PARA EXPERIENCIA LABORAL ---
 class ExperienciaCreate(BaseModel):

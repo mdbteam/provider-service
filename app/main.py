@@ -109,7 +109,7 @@ def get_prestador_detalle(id_prestador: int, conn: pyodbc.Connection = Depends(g
 
         # 5. Reseñas
         cursor.execute(
-            "SELECT * FROM Valoraciones WHERE id_evaluado = ? AND rol_autor = 'cliente' ORDER BY fecha_creacion DESC",
+            "SELECT * FROM Valoraciones WHERE id_evaluado = ?  ORDER BY fecha_creacion DESC",
             id_prestador)
         resenas = [ResenaPublica(**dict(zip([col[0] for col in row.cursor_description], row))) for row in
                    cursor.fetchall()]
@@ -145,7 +145,7 @@ def read_users_me(current_user: UserInDB = Depends(get_current_active_user)):
         id=str(current_user.id_usuario), nombres=current_user.nombres, primer_apellido=current_user.primer_apellido,
         segundo_apellido=current_user.segundo_apellido, rut=current_user.rut, correo=current_user.correo,
         direccion=current_user.direccion, rol=rol_str, foto_url=current_user.foto_url,
-        genero=current_user.genero, fecha_nacimiento=current_user.fecha_nacimiento
+        genero=current_user.genero, fecha_nacimiento=current_user.fecha_nacimiento, telefono=current_user.telefono
     )
 
 
