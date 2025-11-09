@@ -13,7 +13,9 @@ class PrestadorResumen(BaseModel):
     oficios: List[str]
     puntuacion_promedio: float = Field(default=0.0)
     trabajos_realizados: int = Field(default=0)
-    resumen: Optional[str]
+
+    class Config:
+        orm_mode = True
 
 class PostulacionRechazarBody(BaseModel):
     motivo: str = Field(..., min_length=10, description="Motivo del rechazo.")
