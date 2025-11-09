@@ -556,6 +556,42 @@ def modify_postulacion(id_postulacion: int,
 
 # --- ENDPOINTS DE TRABAJOS (CONTRATOS) ---
 
+@app.get("/trabajos/me", response_model=List[TrabajoDetail], tags=["Trabajos"])
+def get_my_completed_trabajos(
+        current_user: UserInDB = Depends(get_current_active_user),
+        conn: pyodbc.Connection = Depends(get_db_connection)
+):
+    """
+    (NUEVO) Obtiene el historial de trabajos 'completados'
+    en los que el usuario participó (como cliente o prestador).
+    """
+    user_id = current_user.id_usuario
+    cursor = conn.cursor()
+
+    try:
+        # Buscamos trabajos completados donde el usuario sea cliente O prestador
+        query = """
+            SELECT * FROM Trabajos
+            WHERE (id_cliente = ? OR id_prestador = ?)
+              AND estado = 'completado'
+            ORDER BY fecha_finalizacion_cliente DESC;
+        """
+        cursor.execute(query, user_id, user_id)
+        rows = cursor.fetchall()
+
+        if not rows:
+            return []
+
+        # Reutilizamos el modelo 'TrabajoDetail'
+        # (Asegúrate de que tu modelo tenga 'from_attributes = True' en la Config)
+        resultados = [TrabajoDetail.from_orm(row) for row in rows]
+        return resultados
+
+    except pyodbc.Error as e:
+        raise HTTPException(status_code=500, detail=f"Error BBDD: {e}")
+    finally:
+        cursor.close()
+
 @app.get("/trabajos/{id_trabajo}", response_model=TrabajoDetalleCliente, tags=["Trabajos"])
 def get_trabajo_detalle(id_trabajo: int,
                         current_user: UserInDB = Depends(get_current_active_user),
@@ -613,7 +649,6 @@ def propose_trabajo(trabajo_data: TrabajoCreate, current_user: UserInDB = Depend
         raise HTTPException(status_code=500, detail=f"Error en la BBDD: {e}")
     finally:
         cursor.close()
-
 
 @app.post("/trabajos/{id_trabajo}/aceptar", response_model=TrabajoDetail, tags=["Trabajos"])
 def accept_trabajo(id_trabajo: int, current_user: UserInDB = Depends(get_current_active_user),

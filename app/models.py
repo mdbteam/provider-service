@@ -200,6 +200,9 @@ class TrabajoDetail(BaseModel):
     fecha_finalizacion_prestador: Optional[datetime] = None
     fecha_finalizacion_cliente: Optional[datetime] = None
 
+    class Config:
+        from_attributes = True
+
 class ValoracionTrabajoCreate(BaseModel):
     puntaje: int = Field(..., ge=1, le=5)
     comentario: Optional[str] = None
