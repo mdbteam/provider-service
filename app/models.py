@@ -6,14 +6,38 @@ from datetime import date, datetime
 
 # --- MODELOS GENERALES ---
 class PrestadorResumen(BaseModel):
-    id: str
+    id_usuario: int # <--- Cambiado de id a id_usuario
     nombres: str
     primer_apellido: str
-    foto_url: str
+    foto_url: Optional[str]
     oficios: List[str]
+    puntuacion_promedio: float = Field(default=0.0)
+    trabajos_realizados: int = Field(default=0)
     resumen: Optional[str]
-    puntuacion: float
 
+class PostulacionRechazarBody(BaseModel):
+    motivo: str = Field(..., min_length=10, description="Motivo del rechazo.")
+
+class PostulacionModificarBody(BaseModel):
+    estado: str = Field(..., description="Nuevo estado, ej: 'requiere_modificacion'")
+    comentario: str = Field(..., description="Comentario para el usuario.")
+
+class ResenaPublicaHistorial(BaseModel):
+    id_trabajo: int
+    id_valoracion: int
+    fecha_creacion: datetime
+    descripcion_cliente: str # Nombre del cliente que hizo la reseña
+    puntaje: int
+    comentario: Optional[str]
+
+class TrabajoDetalleCliente(BaseModel):
+    id_trabajo: int
+    id_cita: int
+    descripcion: Optional[str]
+    condiciones: Optional[str]
+    precio_acordado: Optional[float]
+    estado: str
+    prestador_nombres: str
 # --- MODELO UserPublic UNIFICADO ---
 class UserPublic(BaseModel):
     id: str
