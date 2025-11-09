@@ -320,7 +320,7 @@ def update_my_profile(
     )
 
 
-@app.post("/profile/me/experience", response_model=ExperienciaResponse, status_code=status.HTTP_201_CREATED,
+@app.post("/profile/me/experiencia", response_model=ExperienciaResponse, status_code=status.HTTP_201_CREATED,
           tags=["Perfil"])
 def add_experience(experience_data: ExperienciaCreate, current_user: UserInDB = Depends(get_current_active_user),
                    conn: pyodbc.Connection = Depends(get_db_connection)):
@@ -343,7 +343,7 @@ def add_experience(experience_data: ExperienciaCreate, current_user: UserInDB = 
         cursor.close()
 
 
-@app.get("/profile/me/experience", response_model=List[ExperienciaResponse], tags=["Perfil"])
+@app.get("/profile/me/experiencia", response_model=List[ExperienciaResponse], tags=["Perfil"])
 def get_my_experience(current_user: UserInDB = Depends(get_current_active_user),
                       conn: pyodbc.Connection = Depends(get_db_connection)):
     user_id = current_user.id_usuario
@@ -356,7 +356,7 @@ def get_my_experience(current_user: UserInDB = Depends(get_current_active_user),
     return experiences
 
 
-@app.delete("/profile/me/experience/{id_experiencia}", status_code=status.HTTP_204_NO_CONTENT, tags=["Perfil"])
+@app.delete("/profile/me/experiencia/{id_experiencia}", status_code=status.HTTP_204_NO_CONTENT, tags=["Perfil"])
 def delete_experience(id_experiencia: int, current_user: UserInDB = Depends(get_current_active_user),
                       conn: pyodbc.Connection = Depends(get_db_connection)):
     """(Req 1.10) (Prestador) Elimina un ítem de experiencia laboral de su propio perfil."""
@@ -383,7 +383,7 @@ def delete_experience(id_experiencia: int, current_user: UserInDB = Depends(get_
         cursor.close()
 
 
-@app.get("/prestadores/{id_prestador}/experience", response_model=List[ExperienciaResponse], tags=["Prestadores"])
+@app.get("/prestadores/{id_prestador}/experiencia", response_model=List[ExperienciaResponse], tags=["Prestadores"])
 def get_prestador_experience(id_prestador: int, conn: pyodbc.Connection = Depends(get_db_connection)):
     # (Sin cambios)
     cursor = conn.cursor()
