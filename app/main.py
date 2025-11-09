@@ -506,7 +506,7 @@ def reject_postulacion(id_postulacion: int,
 
         # Guardamos el motivo del rechazo en 'notas_admin'
         cursor.execute("UPDATE Postulaciones SET estado = 'rechazada', notas_admin = ? WHERE id_postulacion = ?",
-                       body.motivo, id_postulacion)  # <--- MODIFICADO
+                       body.motivo, id_postulacion)
         conn.commit()
     except pyodbc.Error as e:
         conn.rollback();
@@ -514,11 +514,11 @@ def reject_postulacion(id_postulacion: int,
     finally:
         cursor.close()
 
-    return {"status": "rechazada", "id_postulacion": id_postulacion}  # <--- MODIFICADO
+    return {"status": "rechazada", "id_postulacion": id_postulacion}
 
 @app.patch("/postulaciones/{id_postulacion}/modificar", tags=["Administración"])
 def modify_postulacion(id_postulacion: int,
-                       data: PostulacionModificarBody,  # <--- MODIFICADO
+                       data: PostulacionModificarBody,
                        admin_user: UserInDB = Depends(get_current_admin_user),
                        conn: pyodbc.Connection = Depends(get_db_connection)):
     """(Req 1.7) Marca una postulación para que el usuario la corrija."""
