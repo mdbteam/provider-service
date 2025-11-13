@@ -6,40 +6,14 @@ from datetime import date, datetime
 
 # --- MODELOS GENERALES ---
 class PrestadorResumen(BaseModel):
-    id_usuario: int # <--- Cambiado de id a id_usuario
+    id: str
     nombres: str
     primer_apellido: str
-    foto_url: Optional[str]
+    foto_url: str
     oficios: List[str]
-    puntuacion_promedio: float = Field(default=0.0)
-    trabajos_realizados: int = Field(default=0)
+    resumen: Optional[str]
+    puntuacion: float
 
-    class Config:
-        orm_mode = True
-
-class PostulacionRechazarBody(BaseModel):
-    motivo: str = Field(..., min_length=10, description="Motivo del rechazo.")
-
-class PostulacionModificarBody(BaseModel):
-    estado: str = Field(..., description="Nuevo estado, ej: 'requiere_modificacion'")
-    comentario: str = Field(..., description="Comentario para el usuario.")
-
-class ResenaPublicaHistorial(BaseModel):
-    id_trabajo: int
-    id_valoracion: int
-    fecha_creacion: datetime
-    descripcion_cliente: str # Nombre del cliente que hizo la reseña
-    puntaje: int
-    comentario: Optional[str]
-
-class TrabajoDetalleCliente(BaseModel):
-    id_trabajo: int
-    id_cita: int
-    descripcion: Optional[str]
-    condiciones: Optional[str]
-    precio_acordado: Optional[float]
-    estado: str
-    prestador_nombres: str
 # --- MODELO UserPublic UNIFICADO ---
 class UserPublic(BaseModel):
     id: str
@@ -199,9 +173,6 @@ class TrabajoDetail(BaseModel):
     fecha_aceptacion: Optional[datetime] = None
     fecha_finalizacion_prestador: Optional[datetime] = None
     fecha_finalizacion_cliente: Optional[datetime] = None
-
-    class Config:
-        from_attributes = True
 
 class ValoracionTrabajoCreate(BaseModel):
     puntaje: int = Field(..., ge=1, le=5)
