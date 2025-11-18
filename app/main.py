@@ -1,6 +1,7 @@
 # provider-service/app/main.py
 from fastapi import FastAPI, Depends, HTTPException, status, File, UploadFile, Query, Response  # <--- MODIFICADO
 from typing import List, Optional
+from fastapi.middleware.cors import CORSMiddleware
 import pyodbc
 from dotenv import load_dotenv
 from datetime import date
