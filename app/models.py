@@ -151,6 +151,9 @@ class PostulacionPendiente(BaseModel):
 class PostulacionModificar(BaseModel):
     notas_admin: str
 
+class PostulacionRechazarBody(BaseModel):
+    motivo_rechazo: Optional[str] = Field(None, max_length=500, description="Razón por la que se rechaza la postulación.")
+
 class ResenaPublica(BaseModel):
     id_valoracion: int
     id_autor: int
