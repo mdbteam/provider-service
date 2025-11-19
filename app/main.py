@@ -1,6 +1,7 @@
 # provider-service/app/main.py
 from fastapi import FastAPI, Depends, HTTPException, status, File, UploadFile, Query, Response  # <--- MODIFICADO
 from typing import List, Optional
+from fastapi.middleware.cors import CORSMiddleware
 import pyodbc
 from dotenv import load_dotenv
 from datetime import date
@@ -25,6 +26,24 @@ app = FastAPI(
     description="Gestiona perfiles, postulaciones y trabajos de los prestadores.",
     version="1.0.0"
 )
+
+# --- CONFIGURACIÓN CORS ---
+origins = [
+    "http://localhost",
+    "http://localhost:8081",
+    "https://auth-service-1-8301.onrender.com",
+    "*",  # solo para desarrollo
+]
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,             # Permite enviar credenciales (cookies, auth headers)
+    allow_methods=["*"],                # Permite todos los métodos HTTP
+    allow_headers=["*"],                # Permite todas las cabeceras
+)
+# --- CONFIGURACIÓN CORS ---
 
 # Constantes
 ROLE_PROVEEDOR = 2;
