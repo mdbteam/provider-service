@@ -67,26 +67,30 @@ def root():
 @app.get("/prestadores", response_model=List[PrestadorResumen], tags=["Prestadores"])
 def get_all_prestadores(
         q: Optional[str] = None,
-        oficio: Optional[str] = None,  # <--- NUEVO (reemplaza 'categoria')
-        rating_min: Optional[float] = Query(None, ge=0, le=5),  # <--- NUEVO
-        sort_by: Optional[str] = None,  # <--- NUEVO
-        limit: Optional[int] = Query(None, gt=0),  # <--- NUEVO
+        oficio: Optional[str] = None,
+        rating_min: Optional[float] = Query(None, ge=0, le=5),
+        sort_by: Optional[str] = None,
+        limit: Optional[int] = Query(None, gt=0),
         conn: pyodbc.Connection = Depends(get_db_connection)
 ):
     cursor = conn.cursor()
 
     params = [ROLE_PROVEEDOR, ROLE_HYBRID]
 
-    # Usamos un CTE (Common Table Expression) para calcular estadísticas
-    # y luego filtrar sobre ellas. Es mucho más limpio.
     query = """
         WITH PrestadorStats AS (
             SELECT 
-                u.id_usuario, u.nombres, u.primer_apellido, u.foto_url,
+                u.id_usuario, 
+                u.nombres, 
+                u.primer_apellido, 
+                u.foto_url,
+                NULL AS resumen, -- Evitamos error 'Invalid column name'
                 (SELECT STRING_AGG(o.nombre_oficio, ', ') FROM Oficio o WHERE o.id_usuario = u.id_usuario) AS oficios_str,
+
                 ISNULL((SELECT AVG(CAST(v.puntaje AS FLOAT)) 
                         FROM Valoraciones v 
                         WHERE v.id_evaluado = u.id_usuario AND v.rol_autor = 'cliente'), 0) AS puntuacion_promedio,
+
                 ISNULL((SELECT COUNT(t.id_trabajo) 
                         FROM Trabajos t 
                         WHERE t.id_prestador = u.id_usuario AND t.estado = 'completado'), 0) AS trabajos_realizados
@@ -114,12 +118,15 @@ def get_all_prestadores(
         search_term = f"%{q}%"
         params.extend([search_term, search_term, search_term])
 
-    # Ordenamiento
+    # ----------------------------------------------------
+    # ⭐ MODIFICACIÓN DE ORDENAMIENTO ⭐
+    # ----------------------------------------------------
     if sort_by == 'rating_desc':
-        query += " ORDER BY puntuacion_promedio DESC"
+        # Ordenación explícita si se pide 'rating_desc'
+        query += " ORDER BY puntuacion_promedio DESC, nombres ASC"
     else:
-        # Orden por defecto (se puede cambiar)
-        query += " ORDER BY nombres ASC"
+        # Ordenación por defecto: Usamos puntuación descendente
+        query += " ORDER BY puntuacion_promedio DESC, nombres ASC"
 
     # Límite (Usando OFFSET/FETCH para compatibilidad con parámetros)
     if limit is not None:
@@ -136,8 +143,9 @@ def get_all_prestadores(
             primer_apellido=row.primer_apellido,
             foto_url=row.foto_url,
             oficios=row.oficios_str.split(', ') if row.oficios_str else [],
-            puntuacion_promedio=round(row.puntuacion_promedio, 1),
-            trabajos_realizados=row.trabajos_realizados
+            puntuacion_promedio=row.puntuacion_promedio,
+            trabajos_realizados=row.trabajos_realizados,
+            resumen=row.resumen
         ) for row in rows]
         return prestadores
 
