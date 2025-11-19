@@ -6,12 +6,12 @@ from datetime import date, datetime
 
 # --- MODELOS GENERALES ---
 class PrestadorResumen(BaseModel):
-    id_usuario: int # <--- Cambiado de id a id_usuario
+    id: int # <--- Cambiado de id a id_usuario
     nombres: str
     primer_apellido: str
     foto_url: Optional[str]
     oficios: List[str]
-    puntuacion_promedio: float = Field(default=0.0)
+    puntuacion: float = Field(default=0.0)
     trabajos_realizados: int = Field(default=0)
     resumen: Optional[str]
 
