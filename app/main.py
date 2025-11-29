@@ -1,5 +1,5 @@
 # provider-service/app/main.py
-from fastapi import FastAPI, Depends, HTTPException, status, File, UploadFile, Query, Response  # <--- MODIFICADO
+from fastapi import FastAPI, Depends, HTTPException, status, File, UploadFile, Query, Response
 from typing import List, Optional
 from fastapi.middleware.cors import CORSMiddleware
 import pyodbc
@@ -67,20 +67,27 @@ def root():
 
 @app.get("/prestadores", response_model=List[PrestadorResumen], tags=["Prestadores"])
 def get_all_prestadores(
-        q: Optional[str] = None,  # (Req 2.4) Parámetro de búsqueda
-        categoria: Optional[str] = None,  # (Req 2.4) Parámetro de categoría
+        q: Optional[str] = Query(None),
+        categoria: Optional[str] = Query(None),
+        genero: Optional[str] = Query(None),
+        edad_minima: Optional[int] = Query(None),
+        edad_maxima: Optional[int] = Query(None),
+        puntuacion_minima: Optional[int] = Query(None),
+        min_trabajos_realizados: Optional[int] = Query(None),
+
         conn: pyodbc.Connection = Depends(get_db_connection)
 ):
     cursor = conn.cursor()
 
-    # Consulta base (simplificada)
+    # Consulta base con la puntuación calculada
     query = """
-        SELECT DISTINCT 
+        SELECT 
             u.id_usuario, u.nombres, u.primer_apellido, u.foto_url,
-            p.resumen_profesional,
+            p.resumen_profesional, 
+            -- 🚨 CAMPOS REQUERIDOS EN LA SALIDA JSON 🚨
+            u.genero, u.fecha_nacimiento, u.trabajos_realizados, 
+            -- 🚨 FIN CAMPOS DE SALIDA 🚨
             (SELECT STRING_AGG(o.nombre_oficio, ', ') FROM Oficio o WHERE o.id_usuario = u.id_usuario) AS oficios,
-            
-            -- LÍNEA AÑADIDA --
             (SELECT ISNULL(AVG(CAST(v.puntaje AS FLOAT)), 0.0) 
              FROM Valoraciones v 
              WHERE v.id_evaluado = u.id_usuario AND v.rol_autor = 'cliente') AS puntuacion_promedio
@@ -91,45 +98,92 @@ def get_all_prestadores(
         WHERE u.id_rol IN (?, ?) AND u.estado = 'activo'
     """
     params = [ROLE_PROVEEDOR, ROLE_HYBRID]
+    where_clauses = []
 
-    # Añadir filtro de CATEGORÍA si existe
+    # --- APLICACIÓN DE FILTROS ---
+
     if categoria:
-        query += " AND ofi.nombre_oficio LIKE ?"
+        where_clauses.append("ofi.nombre_oficio LIKE ?")
         params.append(f"%{categoria}%")
 
-    # Añadir filtro de BÚSQUEDA (q) si existe
+    # Filtro de GÉNERO (Usamos LIKE para evitar fallos por espacios)
+    if genero:
+        where_clauses.append("u.genero LIKE ?")
+        params.append(genero)
+
+    # Filtro de RANGO DE EDAD
+    if edad_minima or edad_maxima:
+        where_clauses.append("u.fecha_nacimiento IS NOT NULL")
+        if edad_minima:
+            where_clauses.append("DATEDIFF(YEAR, u.fecha_nacimiento, GETDATE()) >= ?")
+            params.append(edad_minima)
+        if edad_maxima:
+            where_clauses.append("DATEDIFF(YEAR, u.fecha_nacimiento, GETDATE()) <= ?")
+            params.append(edad_maxima)
+
+    # Filtro de TRABAJOS REALIZADOS
+    if min_trabajos_realizados:
+        where_clauses.append("u.trabajos_realizados >= ?")
+        params.append(min_trabajos_realizados)
+
+    # Filtro de BÚSQUEDA (q, nombre, apellido)
     if q:
-        query += """
-            AND (
-                u.nombres LIKE ? 
-                OR u.primer_apellido LIKE ? 
+        search_term = f"%{q}%"
+        where_clauses.append(f"""
+            (
+                u.nombres COLLATE SQL_Latin1_General_CP1_CI_AI LIKE ? 
+                OR u.primer_apellido COLLATE SQL_Latin1_General_CP1_CI_AI LIKE ? 
                 OR p.resumen_profesional LIKE ?
                 OR ofi.nombre_oficio LIKE ?
             )
-        """
-        search_term = f"%{q}%"
+        """)
         params.extend([search_term, search_term, search_term, search_term])
 
-    # Agrupar y Ordenar
-    query += """
-        GROUP BY u.id_usuario, u.nombres, u.primer_apellido, u.foto_url, p.resumen_profesional
-        ORDER BY puntuacion_promedio DESC;
-    """
+    # Construir la cláusula WHERE final
+    if where_clauses:
+        query += " AND " + " AND ".join(where_clauses)
+
+    # Agrupar por todos los campos necesarios
+    group_by_fields = "u.id_usuario, u.nombres, u.primer_apellido, u.foto_url, p.resumen_profesional, u.genero, u.fecha_nacimiento, u.trabajos_realizados"
+
+    # Aplicar el filtro de PUNTUACIÓN (usando HAVING)
+    if puntuacion_minima:
+        query += f" GROUP BY {group_by_fields} HAVING (SELECT ISNULL(AVG(CAST(v.puntaje AS FLOAT)), 0.0) FROM Valoraciones v WHERE v.id_evaluado = u.id_usuario AND v.rol_autor = 'cliente') >= ?"
+        params.append(puntuacion_minima)
+    else:
+        query += f" GROUP BY {group_by_fields}"
+
+    # Ordenar
+    query += " ORDER BY puntuacion_promedio DESC;"
 
     try:
         # Ejecutamos la consulta dinámica
         cursor.execute(query, tuple(params))
         rows = cursor.fetchall()
+
+        # Mapeo de resultados
         prestadores = [PrestadorResumen(
-            id=str(row.id_usuario), nombres=row.nombres, primer_apellido=row.primer_apellido, foto_url=row.foto_url,
-            oficios=row.oficios.split(', ') if row.oficios else [], resumen=row.resumen_profesional, puntuacion=round(float(row.puntuacion_promedio), 1)
+            id=str(row.id_usuario),
+            nombres=row.nombres,
+            primer_apellido=row.primer_apellido,
+            foto_url=row.foto_url,
+            oficios=row.oficios.split(', ') if row.oficios else [],
+            resumen=row.resumen_profesional,
+            puntuacion_promedio=round(float(row.puntuacion_promedio), 1),
+
+            # 🚨 ASIGNACIÓN DE CAMPOS AHORA VISIBLES EN EL JSON 🚨
+            id_usuario=row.id_usuario,
+            genero=row.genero,
+            fecha_nacimiento=row.fecha_nacimiento,
+            trabajos_realizados=row.trabajos_realizados
+            # 🚨 FIN ASIGNACIÓN 🚨
         ) for row in rows]
+
         return prestadores
     except pyodbc.Error as e:
         raise HTTPException(status_code=500, detail=f"Error en la base de datos: {e}")
     finally:
         cursor.close()
-
 
 @app.get("/categorias", response_model=List[str], tags=["Prestadores"])
 def get_categorias():
@@ -137,9 +191,9 @@ def get_categorias():
     # (Lista actualizada según la imagen que enviaste)
     categorias_fijas = [
         "Gasfitería", "Electricidad", "Pintura", "Albañilería", "Carpintería",
-        "Jardinería", "Mecánica", "Plomería", "Cerrajería",
-        "Reparación de Electrodomésticos", "Instalación de Aire Acondicionado",
-        "Servicios de Limpieza", "Techado", "Otro"
+        "Jardinería", "Mecánica", "Recolección de Escombros", "Cerrajería",
+        "Reparación de Electrodomésticos", "Fletes y Mudanzas",
+        "Servicios de Limpieza", "Techado", "Otros"
     ]
     return categorias_fijas
 

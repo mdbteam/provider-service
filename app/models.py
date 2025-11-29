@@ -6,14 +6,17 @@ from datetime import date, datetime
 
 # --- MODELOS GENERALES ---
 class PrestadorResumen(BaseModel):
-    id: int # <--- Cambiado de id a id_usuario
+    id: Optional[str] = None
+    id_usuario: Optional[int] = None  # Si lo usas para debug
     nombres: str
     primer_apellido: str
-    foto_url: Optional[str]
+    foto_url: Optional[str] = None
     oficios: List[str]
-    puntuacion: float = Field(default=0.0)
-    trabajos_realizados: int = Field(default=0)
-    resumen: Optional[str]
+    puntuacion_promedio: float
+    resumen: Optional[str] = None
+    trabajos_realizados: Optional[int] = None  # Añadir
+    genero: Optional[str] = None  # Añadir
+    fecha_nacimiento: Optional[date] = None  # Añadir
 
 class PostulacionRechazarBody(BaseModel):
     motivo: str = Field(..., min_length=10, description="Motivo del rechazo.")
