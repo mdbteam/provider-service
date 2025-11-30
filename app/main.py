@@ -9,14 +9,17 @@ from datetime import date
 load_dotenv(override=True)
 
 from app.database import get_db_connection
-# Importamos todos los modelos necesarios
+# Importamos todos los modelos necesarios (Agregados los nuevos modelos de valoración)
 from app.models import (
     PrestadorResumen, UserInDB, ProfileDetail, PostulacionForm, PostulacionResponse,
     TrabajoCreate, TrabajoDetail, ValoracionTrabajoCreate, TrabajoHistorial, UserPublic,
     ProfileUpdate, ExperienciaCreate, ExperienciaResponse, ResenaPublica,
     PrestadorPublicoDetalle, PostulacionPendiente,
     PostulacionRechazarBody,
-    PostulacionModificar,DetallePostulacion
+    PostulacionModificar, DetallePostulacion,
+    # --- Nuevos Modelos Importados ---
+    ValoracionCreatedResponse, ResenaPublicaDetalle, AutorResumen,
+    MisResenasResponse, ResenaMiPerfil
 )
 from app.auth_utils import get_current_active_user, get_current_admin_user
 from app.storage import upload_file_and_get_url
@@ -35,21 +38,20 @@ origins = [
     "*",  # solo para desarrollo
 ]
 
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_credentials=True,             # Permite enviar credenciales (cookies, auth headers)
-    allow_methods=["*"],                # Permite todos los métodos HTTP
-    allow_headers=["*"],                # Permite todas las cabeceras
+    allow_credentials=True,  # Permite enviar credenciales (cookies, auth headers)
+    allow_methods=["*"],  # Permite todos los métodos HTTP
+    allow_headers=["*"],  # Permite todas las cabeceras
 )
 # --- CONFIGURACIÓN CORS ---
 
 # Constantes
-ROLE_PROVEEDOR = 2;
-ROLE_HYBRID = 3;
+ROLE_PROVEEDOR = 2
+ROLE_HYBRID = 3
 ROLE_CLIENTE = 1
-STATUS_ACTIVO = 'activo';
+STATUS_ACTIVO = 'activo'
 STATUS_PENDIENTE = 'pendiente'
 
 
@@ -185,6 +187,7 @@ def get_all_prestadores(
     finally:
         cursor.close()
 
+
 @app.get("/categorias", response_model=List[str], tags=["Prestadores"])
 def get_categorias():
     """(Req 2.4) Devuelve la lista de oficios únicos para filtros."""
@@ -196,6 +199,7 @@ def get_categorias():
         "Servicios de Limpieza", "Techado", "Otros"
     ]
     return categorias_fijas
+
 
 @app.get("/prestadores/{id_prestador}", response_model=PrestadorPublicoDetalle, tags=["Prestadores"])
 def get_prestador_detalle(id_prestador: int, conn: pyodbc.Connection = Depends(get_db_connection)):
@@ -226,8 +230,10 @@ def get_prestador_detalle(id_prestador: int, conn: pyodbc.Connection = Depends(g
         experiencia = [ExperienciaResponse(**dict(zip([col[0] for col in row.cursor_description], row))) for row in
                        cursor.fetchall()]
 
-        # 5. Reseñas
-        cursor.execute("SELECT * FROM Valoraciones WHERE id_evaluado = ? ORDER BY fecha_creacion DESC", id_prestador)
+        # 5. Reseñas (Solo las últimas 5 para la vista general, hay otro endpoint para ver todas)
+        cursor.execute(
+            "SELECT TOP 5 * FROM Valoraciones WHERE id_evaluado = ? AND rol_autor = 'cliente' ORDER BY fecha_creacion DESC",
+            id_prestador)
         resenas = [ResenaPublica(**dict(zip([col[0] for col in row.cursor_description], row))) for row in
                    cursor.fetchall()]
 
@@ -247,6 +253,71 @@ def get_prestador_detalle(id_prestador: int, conn: pyodbc.Connection = Depends(g
         )
     except pyodbc.Error as e:
         raise HTTPException(status_code=500, detail=f"Error BBDD: {e}")
+    finally:
+        cursor.close()
+
+
+# --- NUEVO: Endpoint para ver TODAS las Reseñas Públicas (Paginado) ---
+@app.get("/prestadores/{id_prestador}/resenas", response_model=List[ResenaPublicaDetalle],
+         tags=["Prestadores", "Valoraciones"])
+def get_prestador_resenas(
+        id_prestador: int,
+        limit: int = 10,
+        offset: int = 0,
+        orden: str = 'recientes',
+        conn: pyodbc.Connection = Depends(get_db_connection)
+):
+    """(Req 2.0) Obtiene las reseñas públicas recibidas por un prestador con paginación."""
+    cursor = conn.cursor()
+
+    orden_map = {
+        'recientes': 'V.fecha_creacion DESC',
+        'mejor_puntuacion': 'V.puntaje DESC, V.fecha_creacion DESC',
+        'peor_puntuacion': 'V.puntaje ASC, V.fecha_creacion DESC'
+    }
+    order_by = orden_map.get(orden, 'V.fecha_creacion DESC')
+
+    query = f"""
+        SELECT 
+            V.id_valoracion, V.id_trabajo, V.puntaje, V.comentario, V.fecha_creacion,
+            U.id_usuario AS autor_id, U.nombres AS autor_nombres, U.primer_apellido AS autor_primer_apellido,
+            U.foto_url AS autor_foto_url
+        FROM 
+            Valoraciones V
+        JOIN 
+            Usuarios U ON V.id_autor = U.id_usuario
+        WHERE 
+            V.id_evaluado = ? 
+            AND V.rol_autor = 'cliente'
+        ORDER BY 
+            {order_by}
+        OFFSET ? ROWS FETCH NEXT ? ROWS ONLY;
+    """
+
+    try:
+        cursor.execute(query, id_prestador, offset, limit)
+        resenas_db = cursor.fetchall()
+        column_names = [column[0] for column in cursor.description]
+
+        resenas_list = []
+        for row in resenas_db:
+            data_dict = dict(zip(column_names, row))
+
+            # Sub-estructura para el autor
+            autor = AutorResumen(
+                id=data_dict.pop('autor_id'),
+                nombres=data_dict.pop('autor_nombres'),
+                primer_apellido=data_dict.pop('autor_primer_apellido'),
+                foto_url=data_dict.pop('autor_foto_url')
+            )
+
+            resena = ResenaPublicaDetalle(**data_dict, autor=autor)
+            resenas_list.append(resena)
+
+        return resenas_list
+
+    except pyodbc.Error as e:
+        raise HTTPException(status_code=500, detail=f"Error BBDD al obtener reseñas: {e}")
     finally:
         cursor.close()
 
@@ -282,8 +353,6 @@ def update_profile_picture(file: UploadFile = File(...), current_user: UserInDB 
     finally:
         cursor.close()
 
-    # Devolvemos el usuario completo llamando a nuestra otra función de endpoint
-    # FastAPI inyectará las dependencias necesarias para esta llamada interna
     return read_users_me(current_user=current_user)
 
 
@@ -355,21 +424,15 @@ def update_my_profile(
         conn.rollback();
         raise HTTPException(status_code=500, detail=f"Error BBDD: {e}")
 
-    # Volvemos a consultar la BBDD para obtener el estado MÁS reciente
     try:
-        # Reutilizamos el cursor (ya se cerró si hubo error, si no, sigue abierto)
-        # Es más seguro cerrarlo y abrir uno nuevo si la conexión lo permite, pero
-        # la dependencia 'conn' es por *endpoint*. Usémoslo con cuidado.
-        # Mejor práctica: cerrar el cursor anterior y abrir uno nuevo para la nueva consulta.
         if cursor: cursor.close()
-
-        cursor = conn.cursor()  # Abrimos un nuevo cursor en la misma conexión
+        cursor = conn.cursor()
         cursor.execute("SELECT * FROM Usuarios WHERE id_usuario = ?", user_id)
         updated_user_record = cursor.fetchone()
     except pyodbc.Error as e:
         raise HTTPException(status_code=500, detail=f"Actualización exitosa, pero error al re-obtener datos: {e}")
     finally:
-        if cursor: cursor.close()  # Cerramos el nuevo cursor
+        if cursor: cursor.close()
 
     if not updated_user_record:
         raise HTTPException(status_code=404, detail="Usuario no encontrado después de actualizar.")
@@ -432,6 +495,74 @@ def get_my_experience(current_user: UserInDB = Depends(get_current_active_user),
     return experiences
 
 
+# --- NUEVO: Endpoint para ver Mis Reseñas (Como Cliente o Prestador) ---
+@app.get("/profile/me/resenas", response_model=MisResenasResponse, tags=["Perfil", "Valoraciones"])
+def get_mis_resenas(
+        current_user: UserInDB = Depends(get_current_active_user),
+        conn: pyodbc.Connection = Depends(get_db_connection)
+):
+    """
+    (Req 3.0) Obtiene las reseñas escritas (cliente) o recibidas (prestador).
+    Calcula el promedio general basado en las reseñas encontradas.
+    """
+    cursor = conn.cursor()
+    user_id = current_user.id_usuario
+
+    # 1. Definir la lógica basada en el rol
+    es_prestador = current_user.id_rol != ROLE_CLIENTE
+
+    # Si es Prestador, busca reviews RECIBIDAS (donde soy el evaluado)
+    # Si es Cliente, busca reviews ESCRITAS (donde soy el autor)
+    campo_filtro = "V.id_evaluado" if es_prestador else "V.id_autor"
+
+    # 2. Consulta SQL Server para traer la lista
+    query = f"""
+        SELECT 
+            V.id_valoracion, V.puntaje, V.comentario, V.fecha_creacion, V.rol_autor,
+            UA.nombres + ' ' + UA.primer_apellido AS autor_nombres,
+            UE.nombres + ' ' + UE.primer_apellido AS evaluado_nombres
+        FROM 
+            Valoraciones V
+        JOIN 
+            Usuarios UA ON V.id_autor = UA.id_usuario
+        JOIN 
+            Usuarios UE ON V.id_evaluado = UE.id_usuario
+        WHERE 
+            {campo_filtro} = ?
+        ORDER BY 
+            V.fecha_creacion DESC;
+    """
+
+    try:
+        cursor.execute(query, user_id)
+        resenas_db = cursor.fetchall()
+        column_names = [column[0] for column in cursor.description]
+
+        # Convertimos a objetos
+        resenas_list = [ResenaMiPerfil(**dict(zip(column_names, row))) for row in resenas_db]
+
+        # 3. Calcular Promedio (Matemática simple en Python)
+        # Esto asegura que NUNCA sea null si hay reseñas.
+        if resenas_list:
+            total_puntos = sum(r.puntaje for r in resenas_list)
+            promedio = total_puntos / len(resenas_list)
+        else:
+            promedio = 0.0
+
+        # Nota: Si eres prestador, este promedio coincide con tu reputación.
+        # Si eres cliente, este promedio es "Qué tan buena nota sueles poner".
+
+        return MisResenasResponse(
+            promedio_general=round(promedio, 2),  # Redondeamos a 2 decimales
+            total_resenas=len(resenas_list),
+            resenas=resenas_list
+        )
+
+    except pyodbc.Error as e:
+        raise HTTPException(status_code=500, detail=f"Error BBDD al obtener mis reseñas: {e}")
+    finally:
+        cursor.close()
+
 @app.get("/prestadores/{id_prestador}/experience", response_model=List[ExperienciaResponse], tags=["Prestadores"])
 def get_prestador_experience(id_prestador: int, conn: pyodbc.Connection = Depends(get_db_connection)):
     """Obtiene la lista pública de experiencias de un prestador."""
@@ -483,7 +614,7 @@ def send_postulacion(form: PostulacionForm = Depends(), current_user: UserInDB =
             "WHEN MATCHED THEN UPDATE SET estado = ?, fecha_postulacion = GETDATE() "
             "WHEN NOT MATCHED THEN INSERT (id_usuario, estado) VALUES (?, ?);",
             user_id, STATUS_PENDIENTE, user_id, STATUS_PENDIENTE)
-        cursor.execute("UPDATE Usuarios SET estado = ? WHERE id_usuario = ?", STATUS_PENDIENTE, user_id)
+
         conn.commit()
     except pyodbc.Error as e:
         conn.rollback();
@@ -508,6 +639,7 @@ def get_pendientes(admin_user: UserInDB = Depends(get_current_admin_user),
     pendientes = [PostulacionPendiente(**dict(zip([column[0] for column in row.cursor_description], row))) for row in
                   pendientes_db]
     return pendientes
+
 
 @app.get("/postulaciones/{id_postulacion}", response_model=DetallePostulacion, tags=["Administración"])
 def get_detalle_postulacion(
@@ -560,6 +692,7 @@ def get_detalle_postulacion(
         raise HTTPException(status_code=500, detail=f"Error BBDD al obtener detalle: {e}")
     finally:
         cursor.close()
+
 
 @app.post("/postulaciones/{id_postulacion}/aprobar", tags=["Administración"])
 def approve_postulacion(id_postulacion: int, admin_user: UserInDB = Depends(get_current_admin_user),
@@ -632,6 +765,50 @@ def modify_postulacion(id_postulacion: int, data: PostulacionModificar,
     finally:
         cursor.close()
     return {"mensaje": "Postulación modificada."}
+
+
+# --- NUEVO: Endpoint para Eliminar Valoración (Moderación Admin) ---
+@app.delete("/valoraciones/{id_valoracion}", tags=["Administración", "Valoraciones"])
+def delete_valoracion(
+        id_valoracion: int,
+        admin_user: UserInDB = Depends(get_current_admin_user),
+        conn: pyodbc.Connection = Depends(get_db_connection)
+):
+    """(Req 4.0) Permite al Admin eliminar una valoración."""
+    cursor = conn.cursor()
+
+    try:
+        # 1. Obtener ID del Evaluado
+        cursor.execute("SELECT id_evaluado FROM Valoraciones WHERE id_valoracion = ?", id_valoracion)
+        valoracion_data = cursor.fetchone()
+
+        if not valoracion_data:
+            raise HTTPException(status_code=404, detail="Valoración no encontrada.")
+
+        id_evaluado = valoracion_data.id_evaluado
+
+        # 2. Borrar la Valoración
+        cursor.execute("DELETE FROM Valoraciones WHERE id_valoracion = ?", id_valoracion)
+        conn.commit()
+
+        # 3. Recalcular promedio (Solo para devolver el dato, SIN UPDATE)
+        cursor.execute("""
+            SELECT ISNULL(AVG(CAST(puntaje AS FLOAT)), 0.0) 
+            FROM Valoraciones 
+            WHERE id_evaluado = ? AND rol_autor = 'cliente';
+        """, id_evaluado)
+
+        nuevo_promedio = cursor.fetchone()[0]
+
+        # ELIMINADO: cursor.execute("UPDATE Usuarios ...") <- ESTO DABA ERROR
+
+        return {"mensaje": f"Valoración {id_valoracion} eliminada. Nuevo promedio : {round(nuevo_promedio, 2)}."}
+
+    except pyodbc.Error as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Error BBDD al eliminar valoración: {e}")
+    finally:
+        cursor.close()
 
 
 # --- ENDPOINTS DE TRABAJOS (CONTRATOS) ---
@@ -736,11 +913,77 @@ def confirm_trabajo_by_cliente(id_trabajo: int, current_user: UserInDB = Depends
     return {"mensaje": "Trabajo completado. Ahora pueden valorarse."}
 
 
+
+@app.post("/trabajos/{id_trabajo}/valorar-prestador", response_model=ValoracionCreatedResponse,
+          tags=["Trabajos", "Valoraciones"])
+def valorar_trabajo_cliente(
+        id_trabajo: int,
+        valoracion: ValoracionTrabajoCreate,
+        current_user: UserInDB = Depends(get_current_active_user),
+        conn: pyodbc.Connection = Depends(get_db_connection)
+):
+    """
+    (Req 1.0) Crea una valoración del Cliente hacia el Prestador.
+    """
+    cursor = conn.cursor()
+    id_autor = current_user.id_usuario
+
+    try:
+        # 1. Verificar Trabajo
+        cursor.execute("SELECT id_cliente, id_prestador, estado FROM Trabajos WHERE id_trabajo = ?", id_trabajo)
+        trabajo = cursor.fetchone()
+
+        if not trabajo:
+            raise HTTPException(status_code=404, detail="Trabajo no encontrado.")
+        if trabajo.estado != 'completado':
+            raise HTTPException(status_code=400, detail="Solo se puede valorar un trabajo completado.")
+        if id_autor != trabajo.id_cliente:
+            raise HTTPException(status_code=403, detail="Solo el cliente puede usar este endpoint.")
+
+        id_evaluado = trabajo.id_prestador
+
+        # 2. Verificar Valoración Previa
+        cursor.execute("SELECT id_valoracion FROM Valoraciones WHERE id_trabajo = ? AND id_autor = ?",
+                       id_trabajo, id_autor)
+        if cursor.fetchone():
+            raise HTTPException(status_code=400, detail="Ya has valorado este trabajo.")
+
+        # 3. Insertar Valoración
+        cursor.execute(
+            "INSERT INTO Valoraciones (id_trabajo, id_autor, id_evaluado, rol_autor, puntaje, comentario) OUTPUT INSERTED.id_valoracion VALUES (?, ?, ?, ?, ?, ?)",
+            id_trabajo, id_autor, id_evaluado, 'cliente', valoracion.puntaje, valoracion.comentario
+        )
+        id_valoracion = cursor.fetchone()[0]
+
+        # 4. Calcular el Promedio (SIN ACTUALIZAR TABLA USUARIOS)
+        cursor.execute("""
+            SELECT ISNULL(AVG(CAST(puntaje AS FLOAT)), 0.0)
+            FROM Valoraciones 
+            WHERE id_evaluado = ? AND rol_autor = 'cliente'; 
+        """, id_evaluado)
+        nuevo_promedio = cursor.fetchone()[0]
+
+        # ELIMINADO: cursor.execute("UPDATE Usuarios ...") <- ESTO DABA EL ERROR
+
+        conn.commit()
+
+        return ValoracionCreatedResponse(
+            id_valoracion=id_valoracion,
+            nuevo_promedio_prestador=round(nuevo_promedio, 2)
+        )
+
+    except pyodbc.Error as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Error en la BBDD: {e}")
+    finally:
+        cursor.close()
+
+
 @app.post("/trabajos/{id_trabajo}/valorar", tags=["Trabajos"])
 def valorar_trabajo(id_trabajo: int, valoracion: ValoracionTrabajoCreate,
                     current_user: UserInDB = Depends(get_current_active_user),
                     conn: pyodbc.Connection = Depends(get_db_connection)):
-    """Permite valorar un trabajo completado."""
+    """(LEGACY) Permite valorar un trabajo completado (Genérico)."""
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM Trabajos WHERE id_trabajo = ?", id_trabajo)
     trabajo = cursor.fetchone()
