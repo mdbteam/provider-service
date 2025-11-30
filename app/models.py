@@ -166,6 +166,26 @@ class ResenaPublica(BaseModel):
     comentario: Optional[str] = None
     fecha_creacion: datetime
 
+
+class DetallePostulacion(BaseModel):
+    id_postulacion: int
+    id_usuario: int
+    nombres: str
+    primer_apellido: str
+    segundo_apellido: Optional[str] = None
+    correo: str
+    telefono: str
+    direccion: str
+    fecha_postulacion: datetime
+    estado: str
+    oficio: str
+    bio: str
+    archivos_portafolio: List[str]  # Lista de URLs a las imágenes/archivos
+    archivos_certificados: List[str]  # Lista de URLs a los documentos
+
+    class Config:
+        orm_mode = True
+
 # --- MODELO PARA EL PERFIL PÚBLICO DETALLADO ---
 class PrestadorPublicoDetalle(BaseModel):
     id_usuario: int

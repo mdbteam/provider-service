@@ -16,7 +16,7 @@ from app.models import (
     ProfileUpdate, ExperienciaCreate, ExperienciaResponse, ResenaPublica,
     PrestadorPublicoDetalle, PostulacionPendiente,
     PostulacionRechazarBody,
-    PostulacionModificar,
+    PostulacionModificar,DetallePostulacion
 )
 from app.auth_utils import get_current_active_user, get_current_admin_user
 from app.storage import upload_file_and_get_url
@@ -509,6 +509,57 @@ def get_pendientes(admin_user: UserInDB = Depends(get_current_admin_user),
                   pendientes_db]
     return pendientes
 
+@app.get("/postulaciones/{id_postulacion}", response_model=DetallePostulacion, tags=["Administración"])
+def get_detalle_postulacion(
+        id_postulacion: int,
+        conn: pyodbc.Connection = Depends(get_db_connection),
+        admin_user: UserInDB = Depends(get_current_admin_user)
+):
+    """
+    (Req 1.X) Obtiene el detalle completo de una postulación por su ID,
+    incluyendo datos del usuario, biografía, oficio, portafolio y certificados.
+    """
+    cursor = conn.cursor()
+
+    # 1. Consulta SQL Server (Junta todos los datos necesarios)
+    query = """
+        SELECT 
+            P.id_postulacion, U.id_usuario, U.nombres, U.primer_apellido, U.segundo_apellido, 
+            U.correo, U.telefono, U.direccion, P.fecha_postulacion, P.estado,
+            PF.biografia AS bio, PF.resumen_profesional AS oficio,
+            -- Agregamos las URLs de portafolio y certificados como listas separadas
+            (SELECT STRING_AGG(enlace_imagen, ',') FROM Portafolio WHERE id_usuario = U.id_usuario) AS archivos_portafolio_str,
+            (SELECT STRING_AGG(enlace_documento, ',') FROM Certificaciones WHERE id_usuario = U.id_usuario) AS archivos_certificados_str
+        FROM 
+            Postulaciones P
+        INNER JOIN 
+            Usuarios U ON P.id_usuario = U.id_usuario
+        LEFT JOIN 
+            Perfil PF ON U.id_usuario = PF.id_usuario -- LEFT JOIN por si el perfil aún no existe/está incompleto
+        WHERE 
+            P.id_postulacion = ?;
+    """
+
+    try:
+        cursor.execute(query, id_postulacion)
+        postulacion_db = cursor.fetchone()
+
+        if not postulacion_db:
+            raise HTTPException(status_code=404, detail=f"Postulación con ID {id_postulacion} no encontrada.")
+
+        column_names = [column[0] for column in cursor.description]
+        data_dict = dict(zip(column_names, postulacion_db))
+        portafolio_str = data_dict.pop('archivos_portafolio_str')
+        certificados_str = data_dict.pop('archivos_certificados_str')
+
+        data_dict['archivos_portafolio'] = portafolio_str.split(',') if portafolio_str else []
+        data_dict['archivos_certificados'] = certificados_str.split(',') if certificados_str else []
+        return DetallePostulacion(**data_dict)
+
+    except pyodbc.Error as e:
+        raise HTTPException(status_code=500, detail=f"Error BBDD al obtener detalle: {e}")
+    finally:
+        cursor.close()
 
 @app.post("/postulaciones/{id_postulacion}/aprobar", tags=["Administración"])
 def approve_postulacion(id_postulacion: int, admin_user: UserInDB = Depends(get_current_admin_user),
