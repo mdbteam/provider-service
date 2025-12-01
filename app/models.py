@@ -54,6 +54,10 @@ class PrestadorResumen(DBModel):
     genero: Optional[str] = None
     fecha_nacimiento: Optional[date] = None
 
+
+class PrestadorStatusUpdate(BaseModel):
+    estado: str = Field(..., description="Nuevo estado: 'activo' o 'suspendido'")
+
 # --- MODELOS DE PERFIL DETALLADO ---
 
 class ProfileUpdate(BaseModel):

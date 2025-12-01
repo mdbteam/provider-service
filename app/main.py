@@ -4,7 +4,7 @@ from typing import List, Optional
 from fastapi.middleware.cors import CORSMiddleware
 import pyodbc
 from dotenv import load_dotenv
-from datetime import date
+from datetime import date,datetime
 
 load_dotenv(override=True)
 
@@ -19,7 +19,7 @@ from app.models import (
     PostulacionModificar, DetallePostulacion,
     # --- Nuevos Modelos Importados ---
     ValoracionCreatedResponse, ResenaPublicaDetalle, AutorResumen,
-    MisResenasResponse, ResenaMiPerfil
+    MisResenasResponse, ResenaMiPerfil,PrestadorStatusUpdate
 )
 from app.auth_utils import get_current_active_user, get_current_admin_user
 from app.storage import upload_file_and_get_url
@@ -481,6 +481,32 @@ def add_experience(experience_data: ExperienciaCreate, current_user: UserInDB = 
         cursor.close()
 
 
+@app.delete("/profile/me/experience/{id_experiencia}", tags=["Perfil"])
+def delete_experience(
+        id_experiencia: int,
+        current_user: UserInDB = Depends(get_current_active_user),
+        conn: pyodbc.Connection = Depends(get_db_connection)
+):
+    cursor = conn.cursor()
+    user_id = current_user.id_usuario
+    try:
+        cursor.execute("SELECT id_experiencia FROM ExperienciaLaboral WHERE id_experiencia = ? AND id_usuario = ?",
+                       id_experiencia, user_id)
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Experiencia no encontrada o no te pertenece.")
+
+        cursor.execute("DELETE FROM ExperienciaLaboral WHERE id_experiencia = ?", id_experiencia)
+        conn.commit()
+
+        return {"mensaje": "Experiencia eliminada correctamente."}
+
+    except pyodbc.Error as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Error BBDD: {e}")
+    finally:
+        cursor.close()
+
+
 @app.get("/profile/me/experience", response_model=List[ExperienciaResponse], tags=["Perfil"])
 def get_my_experience(current_user: UserInDB = Depends(get_current_active_user),
                       conn: pyodbc.Connection = Depends(get_db_connection)):
@@ -811,6 +837,70 @@ def delete_valoracion(
         cursor.close()
 
 
+@app.delete("/users/{id_usuario}", tags=["Administración"])
+def delete_user(
+        id_usuario: int,
+        admin_user: UserInDB = Depends(get_current_admin_user),
+        conn: pyodbc.Connection = Depends(get_db_connection)
+):
+    """
+    (Req 1.0) Baja Lógica Inteligente.
+    - Valida si ya está eliminado.
+    - Si no, cambia estado a 'eliminado'.
+    - Libera el correo original renombrando el actual.
+    """
+    cursor = conn.cursor()
+    try:
+        # 1. Buscamos al usuario para ver su estado actual y su correo
+        cursor.execute("SELECT correo, estado FROM Usuarios WHERE id_usuario = ?", id_usuario)
+        row = cursor.fetchone()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado.")
+
+        correo_original = row.correo
+        estado_actual = row.estado
+
+        # 2. VALIDADOR: ¿Ya está eliminado?
+        if estado_actual == 'eliminado':
+
+            raise HTTPException(status_code=409, detail=f"El usuario {id_usuario} YA fue eliminado anteriormente.")
+
+        # 3. Preparar el nuevo correo para liberar el original
+        timestamp = int(datetime.now().timestamp())
+        nuevo_correo = f"del_{timestamp}_{correo_original}"
+        if len(nuevo_correo) > 100:
+            nuevo_correo = nuevo_correo[:100]
+
+        # 4. Soft Delete con Anonimización (Manejando campos NOT NULL)
+        img_placeholder = "https://placehold.co/400x400?text=Eliminado"
+
+        cursor.execute("""
+            UPDATE Usuarios 
+            SET estado = 'eliminado', 
+                correo = ?, 
+                nombres = 'Usuario Eliminado', 
+                primer_apellido = 'Baja',
+                segundo_apellido = NULL, -- Cambiar a '' si tu BBDD no acepta NULL
+                foto_url = ?,            -- Usamos el placeholder porque no acepta NULL
+                telefono = NULL,         -- Cambiar a '' si tu BBDD no acepta NULL
+                direccion = NULL         -- Cambiar a '' si tu BBDD no acepta NULL
+            WHERE id_usuario = ?
+        """, nuevo_correo, img_placeholder, id_usuario)
+
+        conn.commit()
+        return {
+            "mensaje": "Usuario dado de baja correctamente.",
+            "correo_liberado": correo_original,
+            "correo_archivado_como": nuevo_correo
+        }
+
+    except pyodbc.Error as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Error BBDD: {e}")
+    finally:
+        cursor.close()
+
 # --- ENDPOINTS DE TRABAJOS (CONTRATOS) ---
 @app.post("/trabajos", response_model=TrabajoDetail, status_code=status.HTTP_201_CREATED, tags=["Trabajos"])
 def propose_trabajo(trabajo_data: TrabajoCreate, current_user: UserInDB = Depends(get_current_active_user),
@@ -1031,5 +1121,78 @@ def get_prestador_trabajos_historial(id_prestador: int, conn: pyodbc.Connection 
         return historial
     except pyodbc.Error as e:
         raise HTTPException(status_code=500, detail=f"Error BBDD: {e}")
+    finally:
+        cursor.close()
+
+
+@app.delete("/trabajos/{id_trabajo}", tags=["Trabajos", "Administración"])
+def delete_trabajo(
+        id_trabajo: int,
+        admin_user: UserInDB = Depends(get_current_admin_user),  # Solo Admin por seguridad
+        conn: pyodbc.Connection = Depends(get_db_connection)
+):
+    """
+    (Req 3.0) Elimina un trabajo por error o duplicado.
+    Advertencia: Esto borra también las valoraciones asociadas (Hard Delete).
+    """
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT id_trabajo FROM Trabajos WHERE id_trabajo = ?", id_trabajo)
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Trabajo no encontrado.")
+
+        cursor.execute("DELETE FROM Valoraciones WHERE id_trabajo = ?", id_trabajo)
+
+        cursor.execute("DELETE FROM Trabajos WHERE id_trabajo = ?", id_trabajo)
+        conn.commit()
+
+        return {"mensaje": f"Trabajo {id_trabajo} eliminado permanentemente."}
+
+    except pyodbc.Error as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Error BBDD al eliminar trabajo: {e}")
+    finally:
+        cursor.close()
+
+
+@app.patch("/prestadores/{id_prestador}/status", tags=["Administración"])
+def update_prestador_status(
+        id_prestador: int,
+        status_data: PrestadorStatusUpdate,
+        admin_user: UserInDB = Depends(get_current_admin_user),
+        conn: pyodbc.Connection = Depends(get_db_connection)
+):
+    """
+    Permite al administrador suspender o reactivar a un prestador.
+    """
+    cursor = conn.cursor()
+
+    # Validamos que el estado sea uno de los permitidos
+    nuevo_estado = status_data.estado.lower()
+    if nuevo_estado not in ['activo', 'suspendido']:
+        raise HTTPException(status_code=400, detail="Estado inválido. Use 'activo' o 'suspendido'.")
+
+    try:
+        cursor.execute("SELECT nombres FROM Usuarios WHERE id_usuario = ?", id_prestador)
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Prestador no encontrado.")
+
+        nombre_usuario = row.nombres
+
+        # Actualizamos
+        cursor.execute("UPDATE Usuarios SET estado = ? WHERE id_usuario = ?", nuevo_estado, id_prestador)
+        conn.commit()
+
+        return {
+            "id": id_prestador,
+            "nombres": nombre_usuario,
+            "estado": nuevo_estado,
+            "mensaje": "Estado actualizado correctamente"
+        }
+
+    except pyodbc.Error as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Error BBDD al actualizar estado: {e}")
     finally:
         cursor.close()
